@@ -71,11 +71,9 @@ The mailinglist is for bug reports, contributions, feedback and getting help.
 
 [~leon_plickat/lavalauncher@lists.sr.ht](mailto:~leon_plickat/lavalauncher@lists.sr.ht)
 
-If you found this project on [GitHub](https://github.com/Leon-Plickat/LavaLauncher),
-you can use that platforms contribution workflow and bug tracking system, but
-beware that I may be slow to respond to anything but email and that development
-officially takes place over at [sourcehut](https://sr.ht/~leon_plickat/LavaLauncher/),
-the main hosting platform for this project.
+If you found this repository on GitHub, or any other forge I have mirrors of my
+projects on, note that I will not respond to messages from that forges issue
+system. Use the mailing list.
 
 
 ## Contributing
