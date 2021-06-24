@@ -1,6 +1,11 @@
 # Contributing to LavaLauncher
 This file explains how you can contribute to LavaLauncher.
 
+Before you read on, beware that **all** contributing happens over email. If you
+found this repository on GitHub, or any other forge I have mirrors of my
+projects on, note that I will not respond to that forges contribution system.
+Use the mailing list.
+
 For larger contributions, especially for radical changes, I highly recommend you
 to ask me whether I will include your commit *before* you start investing time
 into it. Also please respect the coding style, even if you do not like it.
@@ -49,7 +54,7 @@ bar per output are possible.
 ## Communication
 You can ask questions and start discussions on the [mailing list](mailto:~leon_plickat/lavalauncher@lists.sr.ht)
 or if you find me on IRC (my nick is "leon-p" and you can often find me on
-`#sway@freenode.net`).
+`#sway@libera.net`).
 
 
 ## Sending Patches
@@ -61,12 +66,6 @@ a mail, but beware that this is more work for both you and me.
 All code review will happen on the mailing list as well.
 
 Write good commit messages!
-
-If you found this project on [GitHub](https://github.com/Leon-Plickat/LavaLauncher),
-you can use that platforms contribution workflow and bug tracking system, but
-beware that I may be slow to respond to anything but email and that development
-officially takes place over at [sourcehut](https://sr.ht/~leon_plickat/LavaLauncher/),
-the main hosting platform for this project.
 
 
 ## Licensing and Copyright
