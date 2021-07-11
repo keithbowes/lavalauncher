@@ -57,6 +57,12 @@ static void registry_handle_global (void *data, struct wl_registry *registry,
 		context.compositor = wl_registry_bind(registry, name,
 				&wl_compositor_interface, 4);
 	}
+	else if ( strcmp(interface, wl_subcompositor_interface.name) == 0 )
+	{
+		log_message(2, "[registry] Get wl_subcompositor.\n");
+		context.subcompositor = wl_registry_bind(registry, name,
+				&wl_subcompositor_interface, 1);
+	}
 	else if ( strcmp(interface, wl_shm_interface.name) == 0 )
 	{
 		log_message(2, "[registry] Get wl_shm.\n");
@@ -150,6 +156,8 @@ static char *check_for_required_interfaces (void)
 {
 	if ( context.compositor == NULL )
 		return "wl_compositor";
+	if ( context.subcompositor == NULL )
+		return "wl_subcompositor";
 	if ( context.shm == NULL )
 		return "wl_shm";
 	if ( context.layer_shell == NULL )

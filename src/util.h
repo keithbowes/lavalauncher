@@ -23,6 +23,9 @@
 #define LAVALAUNCHER_UTIL_H
 
 #include<stdbool.h>
+#include<cairo/cairo.h>
+
+#include"types/box_t.h"
 
 /* Helper macro to iterate over a struct array. */
 #define FOR_ARRAY(A, B) \
@@ -71,6 +74,9 @@ bool is_boolean_false (const char *str);
 bool set_boolean (bool *b, const char *value);
 uint32_t count_tokens (const char *arg);
 void counter_safe_subtract (uint32_t *counter, uint32_t subtract);
+void clear_cairo_buffer (cairo_t *cairo);
+void rounded_rectangle (cairo_t *cairo, uint32_t x, uint32_t y,
+		uint32_t w, uint32_t h, uradii_t *_radii, uint32_t scale);
 
 #endif
 

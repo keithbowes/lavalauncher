@@ -568,3 +568,140 @@ void destroy_all_items (void)
 		destroy_item(item);
 }
 
+/*******************
+ *                 *
+ *  Item instance  *
+ *                 *
+ *******************/
+void item_instance_next_frame (struct Lava_item_instance *instance)
+{
+	if ( instance->item->type != TYPE_BUTTON )
+	{
+		instance->dirty = false;
+		return;
+	}
+
+	// TODO store previous buffer, so that items do not need to be re-rendered
+	//      when bar unhides.
+	if (instance->bar_instance->hidden)
+	{
+		wl_surface_attach(instance->wl_surface, NULL, 0, 0);
+		wl_surface_commit(instance->wl_surface);
+		return;
+	}
+
+	log_message(2, "[item] Render item frame: global_name=%d\n",
+			instance->bar_instance->output->global_name);
+
+	struct Lava_bar_configuration *config = instance->bar_instance->config;
+	const uint32_t scale = instance->bar_instance->output->scale;
+	const uint32_t icon_padding = config->icon_padding;
+	const uint32_t indicator_padding = config->indicator_padding;
+
+	if (! next_buffer(&instance->current_buffer, context.shm, instance->buffers,
+			instance->w * scale, instance->h * scale))
+		return;
+
+	cairo_t *cairo = instance->current_buffer->cairo;
+	clear_cairo_buffer(cairo);
+	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
+
+	/* Active indicator: Shown when mouse button is pressed down on button 
+	 * or button is touched.
+	 */
+	if ( instance->active_indicator > 0 )
+	{
+		rounded_rectangle(cairo, indicator_padding, indicator_padding,
+				instance->w - (2 * indicator_padding),
+				instance->h - (2 * indicator_padding),
+				&config->radii, scale);
+		colour_t_set_cairo_source(cairo, &config->indicator_active_colour);
+		cairo_fill(cairo);
+	}
+	/* Hover indicator: Shown when cursor hovers over button. */
+	else if ( instance->indicator > 0 )
+	{
+		rounded_rectangle(cairo, indicator_padding, indicator_padding,
+				instance->w - (2 * indicator_padding),
+				instance->h - (2 * indicator_padding),
+				&config->radii, scale);
+		colour_t_set_cairo_source(cairo, &config->indicator_hover_colour);
+		cairo_fill(cairo);
+	}
+
+	// TODO draw indicators for toplevel state
+	// if ( instance->item_instances[i].toplevel_activated_indicator > 0 )
+	// {
+	// 	// TODO
+	// }
+	// if ( instance->item_instances[i].toplevel_exists_indicator > 0 )
+	// {
+	// 	// TODO
+	// }
+
+	/* Draw the icon. */
+	if ( instance->item->img != NULL )
+		image_t_draw_to_cairo(cairo, instance->item->img,
+				icon_padding, icon_padding,
+				instance->w - (2 * icon_padding),
+				instance->h - (2 * icon_padding), scale);
+
+	instance->dirty = false;
+	wl_surface_damage_buffer(instance->wl_surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_set_buffer_scale(instance->wl_surface, (int32_t)scale);
+	wl_surface_attach(instance->wl_surface, instance->current_buffer->buffer, 0, 0);
+
+	wl_surface_commit(instance->wl_surface);
+}
+
+void configure_item_instance (struct Lava_item_instance *instance,
+		uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+	instance->dirty = true;
+
+	instance->x = x;
+	instance->y = y;
+	instance->w = w;
+	instance->h = h;
+
+	wl_subsurface_set_position(instance->wl_subsurface, (int32_t)x, (int32_t)y);
+	wl_surface_commit(instance->wl_surface);
+}
+
+void init_item_instance (struct Lava_item_instance *instance,
+		struct Lava_bar_instance *bar_instance, struct Lava_item *item)
+{
+	// TODO surface listener to know when cursor enters it
+	// -> replaces cursor movement handling code!
+	instance->item = item;
+	instance->active = true;
+	instance->bar_instance = bar_instance;
+	instance->indicator = 0;
+	instance->active_indicator = 0;
+	instance->toplevel_exists_indicator = 0;
+	instance->toplevel_activated_indicator = 0;
+	instance->wl_surface = wl_compositor_create_surface(context.compositor);
+	instance->wl_subsurface = wl_subcompositor_get_subsurface(context.subcompositor,
+			instance->wl_surface, bar_instance->wl_surface);
+
+	/* We update and render subsurfaces synchronous to the parent surface.
+	 * Also see update_bar_instance() and create_bar_instance().
+	 */
+	wl_subsurface_set_sync(instance->wl_subsurface);
+
+	// TODO remove when using surface listeners
+	struct wl_region *region = wl_compositor_create_region(context.compositor);
+	wl_surface_set_input_region(instance->wl_surface, region);
+	wl_region_destroy(region);
+
+	wl_surface_commit(instance->wl_surface);
+}
+
+void finish_item_instance (struct Lava_item_instance *instance)
+{
+	DESTROY(instance->wl_subsurface, wl_subsurface_destroy);
+	DESTROY(instance->wl_surface, wl_surface_destroy);
+	finish_buffer(&instance->buffers[0]);
+	finish_buffer(&instance->buffers[1]);
+}
+

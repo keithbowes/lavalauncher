@@ -26,8 +26,10 @@
 #include<string.h>
 #include<unistd.h>
 #include<ctype.h>
+#include<cairo/cairo.h>
 
 #include"lavalauncher.h"
+#include"types/box_t.h"
 
 void log_message (int level, const char *fmt, ...)
 {
@@ -159,5 +161,27 @@ void counter_safe_subtract (uint32_t *counter, uint32_t subtract)
 		*counter = 0;
 	else
 		*counter -= subtract;
+}
+
+void clear_cairo_buffer (cairo_t *cairo)
+{
+	cairo_save(cairo);
+	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cairo);
+	cairo_restore(cairo);
+}
+
+void rounded_rectangle (cairo_t *cairo, uint32_t x, uint32_t y,
+		uint32_t w, uint32_t h, uradii_t *_radii, uint32_t scale)
+{
+	const double degrees = 3.1415927 / 180.0;
+	x *= scale, y *= scale, w *= scale, h *= scale;
+	uradii_t radii = uradii_t_scale(_radii, scale);
+	cairo_new_sub_path(cairo);
+	cairo_arc(cairo, x + w - radii.top_right,    y     + radii.top_right,    radii.top_right,   -90 * degrees,   0 * degrees);
+	cairo_arc(cairo, x + w - radii.bottom_right, y + h - radii.bottom_right, radii.bottom_right,  0 * degrees,  90 * degrees);
+	cairo_arc(cairo, x     + radii.bottom_left,  y + h - radii.bottom_left,  radii.bottom_left,  90 * degrees, 180 * degrees);
+	cairo_arc(cairo, x     + radii.top_left,     y     + radii.top_left,     radii.top_left,    180 * degrees, 270 * degrees);
+	cairo_close_path(cairo);
 }
 

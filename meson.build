@@ -23,6 +23,7 @@ add_project_arguments(cc.get_supported_arguments([
   '-Wsign-conversion',
   '-Wfloat-conversion',
   '-Wunused-result',
+  '-Wmaybe-uninitialized',
 ]), language: 'c')
 
 if get_option('watch-config').enabled()

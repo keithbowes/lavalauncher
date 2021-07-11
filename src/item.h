@@ -25,6 +25,7 @@
 #include<cairo/cairo.h>
 
 #include"types/image_t.h"
+#include"types/buffer.h"
 
 struct Lava_bar_instance;
 struct Lava_seat;
@@ -81,7 +82,8 @@ struct Lava_item
 struct Lava_item_instance
 {
 	struct Lava_item *item;
-	int32_t x, y;
+	struct Lava_bar_instance *bar_instance;
+	uint32_t x, y;
 	uint32_t w, h;
 
 	uint32_t indicator;
@@ -89,11 +91,15 @@ struct Lava_item_instance
 	uint32_t toplevel_exists_indicator;
 	uint32_t toplevel_activated_indicator;
 
+	struct wl_surface    *wl_surface;
+	struct wl_subsurface *wl_subsurface;
+	struct Lava_buffer    buffers[2];
+	struct Lava_buffer   *current_buffer;
+
+	bool dirty;
+
 	/** Is the item displayed on this bar instance? */
 	bool active;
-
-	/** Does the item need to be redrawn? */
-	bool dirty;
 };
 
 bool create_item (enum Item_type type);
@@ -103,6 +109,13 @@ void item_interaction (struct Lava_item *item, struct Lava_bar_instance *instanc
 		struct Lava_seat *seat, enum Interaction_type type,
 		uint32_t modifiers, uint32_t special);
 void destroy_all_items (void);
+
+void item_instance_next_frame (struct Lava_item_instance *instance);
+void configure_item_instance (struct Lava_item_instance *instance,
+		uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+void init_item_instance (struct Lava_item_instance *instance,
+		struct Lava_bar_instance *bar_instance, struct Lava_item *item);
+void finish_item_instance (struct Lava_item_instance *instance);
 
 #endif
 

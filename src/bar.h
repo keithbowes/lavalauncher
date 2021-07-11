@@ -150,7 +150,7 @@ struct Lava_bar_instance
 
 	struct wl_list indicators;
 
-	bool dirty;
+	bool background_dirty;
 
 	bool configured;
 };
