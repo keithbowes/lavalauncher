@@ -482,11 +482,19 @@ static void pointer_handle_enter (void *data, struct wl_pointer *wl_pointer,
 {
 	struct Lava_seat *seat = (struct Lava_seat *)data;
 	seat->pointer.serial = serial;
-	if ( NULL == (seat->pointer.instance = bar_instance_from_surface(surface)) )
+
+	seat->pointer.instance = bar_instance_from_surface(surface);
+	if ( seat->pointer.instance == NULL )
 	{
+		/* Should be unreachable, but handling this is a good idea for
+		 * debugging.
+		 */
 		log_message(0, "ERROR: Pointer entered unexpected surface.\n");
 		return;
 	}
+
+	bar_instance_pointer_enter(seat->pointer.instance);
+
 	seat->pointer.x = (uint32_t)wl_fixed_to_int(x);
 	seat->pointer.y = (uint32_t)wl_fixed_to_int(y);
 	log_message(1, "[input] Pointer entered surface: x=%d y=%d\n",
