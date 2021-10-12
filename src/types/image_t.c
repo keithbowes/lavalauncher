@@ -211,7 +211,10 @@ void image_t_draw_to_cairo (cairo_t *cairo, image_t *image,
 		{
 			cairo_scale(cairo, (float)width / rsvg_width.length,
 					(float)width / rsvg_height.length);
-			rsvg_handle_render_cairo(image->rsvg_handle, cairo);
+			GError *gerror = NULL;
+			rsvg_handle_render_document(image->rsvg_handle, cairo,
+					&viewbox, &gerror);
+			// TODO check value of gerror
 		}
 	}
 #endif
