@@ -351,7 +351,7 @@ bar
 	config
 	{
 		# Condition for this configuration set.
-		conditions-resolution = higher-than-wide;
+		condition-resolution = higher-than-wide;
 
 		# Additional configuration sets copy the default configuration set,
 		# but settings can be overwritten.
