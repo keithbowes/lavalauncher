@@ -54,7 +54,6 @@ xkbcommon         = dependency('xkbcommon')
 
 if ['dragonfly', 'freebsd', 'netbsd', 'openbsd'].contains(host_machine.system())
   libinotify = dependency('libinotify', required: get_option('watch-config'))
-  add_project_arguments(cc.get_supported_arguments([ '-DBSD' ]), language: 'c')
 else
   libinotify = []
 endif

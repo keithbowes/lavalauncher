@@ -28,7 +28,7 @@
 #include<errno.h>
 #include<signal.h>
 
-#ifndef BSD
+#ifdef __linux__
 #include<execinfo.h>
 #endif
 
@@ -61,7 +61,7 @@ static void handle_error (int signum)
 		"\n";
 	fputs(msg, stderr);
 
-#ifndef BSD
+#ifdef __linux__
 	fputs("Attempting to get backtrace:\n", stderr);
 
 	/* In some rare cases, getting a backtrace can also cause a segfault.
