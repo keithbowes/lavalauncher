@@ -29,7 +29,10 @@
 #include<signal.h>
 
 #ifdef __linux__
+#include<features.h>
+#ifdef __GLIBC__
 #include<execinfo.h>
+#endif
 #endif
 
 #include"lavalauncher.h"
@@ -62,6 +65,7 @@ static void handle_error (int signum)
 	fputs(msg, stderr);
 
 #ifdef __linux__
+#ifdef __GLIBC__
 	fputs("Attempting to get backtrace:\n", stderr);
 
 	/* In some rare cases, getting a backtrace can also cause a segfault.
@@ -72,6 +76,7 @@ static void handle_error (int signum)
 	const int calls = backtrace(buffer, sizeof(buffer) / sizeof(void *));
 	backtrace_symbols_fd(buffer, calls, fileno(stderr));
 	fputs("\n", stderr);
+#endif
 #endif
 
 	/* Let's let the default handlers deal with the rest. */
