@@ -314,14 +314,18 @@ static bool wayland_source_finish (struct pollfd *fd)
 
 static bool wayland_source_flush (struct pollfd *fd)
 {
-	do {
-		if ( wl_display_flush(context.display) == 1 && errno != EAGAIN )
-		{
-			log_message(0, "ERROR: wl_display_flush: %s\n",
-					strerror(errno));
-			break;
-		}
-	} while ( errno == EAGAIN );
+	int ret = 1;
+	while ( ret > 0 )
+	{
+		ret = wl_display_dispatch_pending(wl_display);
+		wl_display_flush(wl_display);
+	}
+	if ( ret < 0 )
+	{
+		fprintf(stderr, "ERROR: wl_display_dispatch_pending: %s\n", strerror(errno));
+		ret = EXIT_FAILURE;
+		return false;
+	}
 	return true;
 }
 
