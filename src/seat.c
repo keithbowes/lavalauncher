@@ -44,7 +44,7 @@
 #include"output.h"
 
 /* No-Op function. */
-static void noop () {}
+static void noop (void) {}
 
 /**************
  *            *

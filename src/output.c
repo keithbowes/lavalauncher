@@ -39,7 +39,7 @@
 #include"seat.h"
 
 /* No-Op function. */
-static void noop () {}
+static void noop (void) {}
 
 static bool output_configure_bar_instance (struct Lava_output *output)
 {
