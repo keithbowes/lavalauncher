@@ -40,7 +40,7 @@
 #include"bar.h"
 
 /* No-Op function. */
-static void noop () {}
+static void noop (void) {}
 
 /* Loop through all bar patterns and create / destroy / update their instances on this output. */
 static bool update_bar_instances_on_output (struct Lava_output *output)
