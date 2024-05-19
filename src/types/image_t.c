@@ -198,25 +198,32 @@ void image_t_draw_to_cairo (cairo_t *cairo, image_t *image,
 		// TODO maybe set DPI?
 		gboolean has_width, has_height, has_viewbox;
 		RsvgLength rsvg_width, rsvg_height;
-		RsvgRectangle viewbox;
+		RsvgRectangle viewbox = {.x=0, .y=0, .width=48, .height=48};	/*sensible defaults incase viewbox is missing from file*/
+
 		rsvg_handle_get_intrinsic_dimensions(image->rsvg_handle,
 				&has_width, &rsvg_width, &has_height, &rsvg_height,
 				&has_viewbox, &viewbox);
-		if ( ! has_width || ! has_height )
-			log_message(0, "ERROR: Can not render SVG image without width or height.\n");
-		else if ( rsvg_width.length == 0 || rsvg_height.length == 0 )
-			log_message(0, "ERROR: Can not render SVG image with width or height of 0.\n");
-		else if ( rsvg_width.unit != RSVG_UNIT_PX || rsvg_height.unit != RSVG_UNIT_PX )
-			log_message(0, "ERROR: Can not render SVG image whichs width or height are not defined in pixels.\n");
-		else
+		if ( ! has_viewbox )
 		{
-			cairo_scale(cairo, (float)width / rsvg_width.length,
-					(float)width / rsvg_height.length);
-			GError *gerror = NULL;
-			rsvg_handle_render_document(image->rsvg_handle, cairo,
-					&viewbox, &gerror);
-			// TODO check value of gerror
+			if ( ! has_width || ! has_height )
+				log_message(0, "WARNING: SVG image missing viewbox and width/height, using default.\n");
+			else if ( rsvg_width.length == 0 || rsvg_height.length == 0 )
+				log_message(0, "WARNING: SVG image missing viewbox and width/height is zero, using default.\n");
+			else if ( rsvg_width.unit != RSVG_UNIT_PX || rsvg_height.unit != RSVG_UNIT_PX )
+				log_message(0, "WARNING: SVG image missing viewbox and width/height is not defined in pixels, using default.\n");
+			else
+			{
+				log_message(0, "WARNING: SVG image missing viewbox, constructing from width/height.\n");
+				viewbox.width = rsvg_width.length;
+				viewbox.height = rsvg_height.length;
+			}
 		}
+		cairo_scale(cairo, (float)width / viewbox.width,
+				(float)width / viewbox.height);
+		GError *gerror = NULL;
+		rsvg_handle_render_document(image->rsvg_handle, cairo,
+				&viewbox, &gerror);
+		// TODO check value of gerror
 	}
 #endif
 
