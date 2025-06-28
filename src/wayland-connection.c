@@ -89,7 +89,7 @@ static void registry_handle_global (void *data, struct wl_registry *registry,
 	else if ( strcmp(interface, wl_output_interface.name) == 0 )
 	{
 		struct wl_output *wl_output = wl_registry_bind(registry, name,
-			&wl_output_interface, version);
+			&wl_output_interface, 3);
 		if (! create_output(registry, name, wl_output))
 			goto error;
 	}
@@ -317,8 +317,8 @@ static bool wayland_source_flush (struct pollfd *fd)
 	int ret = 1;
 	while ( ret > 0 )
 	{
-		ret = wl_display_dispatch_pending(wl_display);
-		wl_display_flush(wl_display);
+		ret = wl_display_dispatch_pending(context.display);
+		wl_display_flush(context.display);
 	}
 	if ( ret < 0 )
 	{
