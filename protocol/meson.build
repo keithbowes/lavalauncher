@@ -1,8 +1,8 @@
-wp_dir = wayland_protocols.get_pkgconfig_variable('pkgdatadir')
+wp_dir = wayland_protocols.get_variable(pkgconfig: 'pkgdatadir')
 
 wayland_scanner_dep = dependency('wayland-scanner', native: true)
 wayland_scanner = find_program(
-  wayland_scanner_dep.get_pkgconfig_variable('wayland_scanner'),
+  wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
   native: true,
 )
 
