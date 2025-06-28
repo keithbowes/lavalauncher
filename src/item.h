@@ -21,13 +21,14 @@
 #define LAVALAUNCHER_ITEM_H
 
 #include<stdbool.h>
-#include<wayland-server.h>
+#include<wayland-client.h>
 #include<cairo/cairo.h>
 
 #include"types/image_t.h"
+#include"types/buffer.h"
 
-struct Lava_bar;
 struct Lava_bar_instance;
+struct Lava_seat;
 
 enum Item_type
 {
@@ -43,11 +44,21 @@ enum Interaction_type
 	INTERACTION_UNIVERSAL
 };
 
+enum Meta_action
+{
+	META_ACTION_NONE,
+	META_ACTION_TOPLEVEL_ACTIVATE,
+	META_ACTION_TOPLEVEL_CLOSE,
+	META_ACTION_RELOAD,
+	META_ACTION_EXIT,
+};
+
 struct Lava_item_command
 {
 	struct wl_list link;
 
 	enum Interaction_type type;
+	enum Meta_action action;
 	char *command;
 	uint32_t modifiers;
 
@@ -60,21 +71,51 @@ struct Lava_item
 	struct wl_list link;
 	enum Item_type type;
 
+	uint32_t spacer_length;
+
 	image_t *img;
 	struct wl_list commands;
 
-	unsigned int index, ordinate, length;
+	char *associated_app_id;
 };
 
-bool create_item (struct Lava_bar *bar, enum Item_type type);
+struct Lava_item_instance
+{
+	struct Lava_item *item;
+	struct Lava_bar_instance *bar_instance;
+	uint32_t x, y;
+	uint32_t w, h;
+
+	uint32_t indicator;
+	uint32_t active_indicator;
+	uint32_t toplevel_exists_indicator;
+	uint32_t toplevel_activated_indicator;
+
+	struct wl_surface    *wl_surface;
+	struct wl_subsurface *wl_subsurface;
+	struct Lava_buffer    buffers[2];
+	struct Lava_buffer   *current_buffer;
+
+	bool dirty;
+
+	/** Is the item displayed on this bar instance? */
+	bool active;
+};
+
+bool create_item (enum Item_type type);
 bool item_set_variable (struct Lava_item *item, const char *variable,
-		const char *value, int line);
+		const char *value, uint32_t line);
 void item_interaction (struct Lava_item *item, struct Lava_bar_instance *instance,
-		enum Interaction_type type, uint32_t modifiers, uint32_t special);
-struct Lava_item *item_from_coords (struct Lava_bar_instance *instance, uint32_t x, uint32_t y);
-unsigned int get_item_length_sum (struct Lava_bar *bar);
-bool finalize_items (struct Lava_bar *bar);
-void destroy_all_items (struct Lava_bar *bar);
+		struct Lava_seat *seat, enum Interaction_type type,
+		uint32_t modifiers, uint32_t special);
+void destroy_all_items (void);
+
+void item_instance_next_frame (struct Lava_item_instance *instance);
+void configure_item_instance (struct Lava_item_instance *instance,
+		uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+void init_item_instance (struct Lava_item_instance *instance,
+		struct Lava_bar_instance *bar_instance, struct Lava_item *item);
+void finish_item_instance (struct Lava_item_instance *instance);
 
 #endif
 

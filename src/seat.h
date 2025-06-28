@@ -40,21 +40,27 @@ enum Modifiers
 	SHIFT   = 1 << 5
 };
 
+enum Lava_cursor_type
+{
+	CURSOR_NONE,
+	CURSOR_DEFAULT,
+	CURSOR_POINTER
+};
+
 struct Lava_touchpoint
 {
 	struct wl_list            link;
 	int32_t                   id;
-	struct Lava_bar_instance *instance;
-	struct Lava_item         *item;
 
-	struct Lava_item_indicator *indicator;
+	struct Lava_bar_instance  *instance;
+	struct Lava_item_instance *item_instance;
 };
 
 struct Lava_seat
 {
 	struct wl_list link;
-
 	struct wl_seat *wl_seat;
+	uint32_t global_name;
 
 	struct
 	{
@@ -71,10 +77,15 @@ struct Lava_seat
 	{
 		struct wl_pointer *wl_pointer;
 
+		int click;
+
+		/* Serial of enter event, used for setting the cursor. */
+		uint32_t serial;
+
 		/* Current position. */
 		uint32_t x, y;
-		struct Lava_bar_instance *instance;
-		struct Lava_item *item;
+		struct Lava_bar_instance  *instance;
+		struct Lava_item_instance *item_instance;
 
 		/* Stuff needed to gracefully handle scroll events. */
 		uint32_t   discrete_steps, last_update_time;
@@ -83,11 +94,14 @@ struct Lava_seat
 		/* Hover indicator. */
 		struct Lava_item_indicator *indicator;
 
-		/* Stuff needed to change the cursor image. */
-		struct wl_surface      *cursor_surface;
-		struct wl_cursor_theme *cursor_theme;
-		struct wl_cursor_image *cursor_image;
-		struct wl_cursor       *cursor;
+		struct
+		{
+			enum Lava_cursor_type   type;
+			struct wl_surface      *surface;
+			struct wl_cursor_theme *theme;
+			struct wl_cursor_image *image;
+			struct wl_cursor       *wl_cursor;
+		} cursor;
 	} pointer;
 
 	struct
@@ -99,7 +113,10 @@ struct Lava_seat
 
 bool create_seat (struct wl_registry *registry, uint32_t name,
 		const char *interface, uint32_t version);
-void destroy_all_seats (void);
+struct Lava_seat *get_seat_from_global_name (uint32_t name);
+void destroy_seat (struct Lava_seat *seat);
+
+void destroy_touchpoint (struct Lava_touchpoint *touchpoint);
 
 #endif
 

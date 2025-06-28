@@ -20,25 +20,25 @@
 #ifndef LAVALAUNCHER_OUTPUT_H
 #define LAVALAUNCHER_OUTPUT_H
 
-#include<wayland-server.h>
+#include<wayland-client.h>
 
 enum Lava_output_status
 {
-	/* Output has been created, but does not yet have an xdg_output or any bars. */
+	/* Output has been created, but does not yet have an xdg_output or a bar. */
 	OUTPUT_STATUS_UNCONFIGURED,
 
-	/* Output has xdg_output, and bars. */
+	/* Output has xdg_output and bar. */
 	OUTPUT_STATUS_USED,
 
-	/* Output has xdg_output, but currently no bars. */
-	OUTPUT_STATUS_UNUSED,
+	/* Output has xdg_output but currently no bar. */
+	OUTPUT_STATUS_UNUSED
 };
 
 struct Lava_output
 {
 	struct wl_list link;
 
-	struct wl_list bar_instances;
+	struct Lava_bar_instance *bar_instance;
 
 	struct wl_output      *wl_output;
 	struct zxdg_output_v1 *xdg_output;
@@ -58,11 +58,10 @@ struct Lava_output
 };
 
 bool create_output (struct wl_registry *registry, uint32_t name,
-		const char *interface, uint32_t version);
-bool configure_output (struct Lava_output *output);
+				struct wl_output *wl_output);
+void configure_output (struct Lava_output *output);
 struct Lava_output *get_output_from_global_name (uint32_t name);
 void destroy_output (struct Lava_output *output);
-void destroy_all_outputs (void);
 
 #endif
 

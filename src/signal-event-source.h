@@ -1,7 +1,7 @@
 /*
  * LavaLauncher - A simple launcher panel for Wayland
  *
- * Copyright (C) 2020 Leon Henrik Plickat
+ * Copyright (C) 2021 Leon Henrik Plickat
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,18 +17,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef LAVALAUNCHER_STR_H
-#define LAVALAUNCHER_STR_H
+#ifndef LAVALAUNCHER_SIGNAL_H
+#define LAVALAUNCHER_SIGNAL_H
 
-#include<stdbool.h>
+struct Lava_event_source;
 
-void log_message (int level, const char *fmt, ...);
-void free_if_set (void *ptr);
-void set_string (char **ptr, char *arg);
-char *get_formatted_buffer (const char *fmt, ...);
-const char *str_orelse (const char *str, const char *orelse);
-void setenvf (const char *name, const char *fmt, ...);
-bool string_starts_with(const char *str, const char *prefix);
+extern struct Lava_event_source signal_source;
 
 #endif
 

@@ -27,12 +27,16 @@
 #include<getopt.h>
 
 #include"bar.h"
-#include"config.h"
+#include"item.h"
+#include"config-parser.h"
 #include"event-loop.h"
 #include"lavalauncher.h"
-#include"str.h"
+#include"util.h"
 #include"wayland-connection.h"
-#include"misc-event-sources.h"
+#include"signal-event-source.h"
+#if WATCH_CONFIG
+#include"inotify-event-source.h"
+#endif
 
 /* The context is used basically everywhere. So instead of passing pointers
  * around, just have it global.
@@ -88,36 +92,6 @@ static bool handle_command_flags (int argc, char *argv[])
 	return true;
 }
 
-static bool get_default_config_path (void)
-{
-	struct
-	{
-		const char *fmt;
-		const char *env;
-	} paths[] = {
-		{ .fmt = "./lavalauncher.conf",                           .env = NULL                      },
-		{ .fmt = "%s/lavalauncher/lavalauncher.conf",             .env = getenv("XDG_CONFIG_HOME") },
-		{ .fmt = "%s/.config/lavalauncher/lavalauncher.conf",     .env = getenv("HOME")            },
-		{ .fmt = "/usr/local/etc/lavalauncher/lavalauncher.conf", .env = NULL                      },
-		{ .fmt = "/etc/lavalauncher/lavalauncher.conf",           .env = NULL                      }
-	};
-
-	FOR_ARRAY(paths, i)
-	{
-		context.config_path = get_formatted_buffer(paths[i].fmt, paths[i].env);
-		if (! access(context.config_path, F_OK | R_OK))
-		{
-			log_message(1, "[main] Using default configuration file path: %s\n", context.config_path);
-			return true;
-		}
-		free_if_set(context.config_path);
-	}
-
-	log_message(0, "ERROR: Can not find configuration file.\n"
-			"INFO: You can provide a path manually with '-c'.\n");
-	return false;
-}
-
 static void init_context (void)
 {
 	context.ret         = EXIT_FAILURE;
@@ -132,25 +106,31 @@ static void init_context (void)
 
 	context.display            = NULL;
 	context.registry           = NULL;
+	context.sync               = NULL;
 
 	context.compositor         = NULL;
-	context.subcompositor      = NULL;
 	context.shm                = NULL;
 	context.layer_shell        = NULL;
 	context.xdg_output_manager = NULL;
 
 	context.river_status_manager = NULL;
 	context.need_river_status    = false;
+	context.foreign_toplevel_manager = NULL;
+	context.need_foreign_toplevel    = false;
 
 	context.need_keyboard = false;
 	context.need_pointer  = false;
 	context.need_touch    = false;
 
-	wl_list_init(&context.bars);
-	context.last_bar = NULL;
+	context.last_config    = NULL;
+	context.default_config = NULL;
+	context.last_item      = NULL;
 
 	wl_list_init(&context.outputs);
 	wl_list_init(&context.seats);
+	wl_list_init(&context.items);
+	wl_list_init(&context.configs);
+	wl_list_init(&context.toplevels);
 }
 
 int main (int argc, char *argv[])
@@ -163,45 +143,46 @@ reload:
 
 	log_message(1, "[main] LavaLauncher: version=%s\n", LAVALAUNCHER_VERSION);
 
-	/* If the user did not provide the path to a configuration file, try
-	 * the default location.
-	 */
-	if ( context.config_path == NULL )
-		if (! get_default_config_path())
-			return EXIT_FAILURE;
-
 	/* Try to parse the configuration file. If this fails, there might
 	 * already be heap objects, so some cleanup is needed.
 	 */
 	if (! parse_config_file())
 		goto exit;
+	if (! finalize_all_bar_configs())
+		goto exit;
+	context.item_amount = wl_list_length(&context.items);
+	if ( context.item_amount == 0 )
+	{
+		log_message(0, "ERROR: No items configured.\n");
+		goto exit;
+	}
 
-	context.ret = EXIT_SUCCESS;
-
-	/* Set up the event loop and attach all event sources. */
 	struct Lava_event_loop loop;
-	event_loop_init(&loop);
+	if (! event_loop_init(&loop, 3))
+		goto exit;
 	event_loop_add_event_source(&loop, &wayland_source);
 #if WATCH_CONFIG
 	if (context.watch)
 		event_loop_add_event_source(&loop, &inotify_source);
 #endif
-#if HANDLE_SIGNALS
 	event_loop_add_event_source(&loop, &signal_source);
-#endif
+	context.ret = event_loop_run(&loop) ? EXIT_SUCCESS : EXIT_FAILURE;
 
-	/* Run the event loop. */
-	if (! event_loop_run(&loop))
-		context.ret = EXIT_FAILURE;
+	/* We only need to finish the event loop if it was successfully
+	 * initialized, which is why we do that here instead of like the other
+	 * cleanup code after the exit: label.
+	 */
+	event_loop_finish(&loop);
 
 exit:
 	free(context.config_path);
 
-	/* Clean up objects created when parsing the configuration file. */
-	destroy_all_bars();
+	destroy_all_items();
+	destroy_all_bar_configs();
 
 	if (context.reload)
 		goto reload;
+
 	return context.ret;
 }
 

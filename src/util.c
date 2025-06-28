@@ -25,8 +25,11 @@
 #include<stdlib.h>
 #include<string.h>
 #include<unistd.h>
+#include<ctype.h>
+#include<cairo/cairo.h>
 
 #include"lavalauncher.h"
+#include"types/box_t.h"
 
 void log_message (int level, const char *fmt, ...)
 {
@@ -98,6 +101,87 @@ void setenvf (const char *name, const char *fmt, ...)
 
 bool string_starts_with(const char *str, const char *prefix)
 {
-	return strncmp(prefix, str, strlen(prefix)) == 0;
+	const size_t len_str = strlen(str);
+	const size_t len_prefix = strlen(prefix);
+	const size_t min_len = len_str > len_prefix ? len_prefix : len_str;
+	return strncmp(prefix, str, min_len) == 0;
+}
+
+bool is_boolean_true (const char *str)
+{
+	return ( ! strcmp(str, "true") || ! strcmp(str, "yes") || ! strcmp(str, "on") || ! strcmp(str, "1") );
+}
+
+bool is_boolean_false (const char *str)
+{
+	return ( ! strcmp(str, "false") || ! strcmp(str, "no") || ! strcmp(str, "off") || ! strcmp(str, "0") );
+}
+
+bool set_boolean (bool *b, const char *value)
+{
+	if (is_boolean_true(value))
+		*b = true;
+	else if (is_boolean_false(value))
+		*b = false;
+	else
+	{
+		log_message(0, "ERROR: Not a boolean: %s\n", value);
+		return false;
+	}
+	return true;
+}
+
+/* Return amount of whitespace separated tokens.
+ * Example: "hello"  => 1
+ *          "hell o" => 2
+ */
+uint32_t count_tokens (const char *arg)
+{
+	uint32_t args = 0;
+	bool on_arg = false;
+	for (const char *i = arg; *i != '\0'; i++)
+	{
+		if (isspace(*i))
+		{
+			if (on_arg)
+				on_arg = false;
+		}
+		else if (! on_arg)
+		{
+			on_arg = true;
+			args++;
+		}
+	}
+	return args;
+}
+
+void counter_safe_subtract (uint32_t *counter, uint32_t subtract)
+{
+	if ( subtract > *counter )
+		*counter = 0;
+	else
+		*counter -= subtract;
+}
+
+void clear_cairo_buffer (cairo_t *cairo)
+{
+	cairo_save(cairo);
+	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cairo);
+	cairo_restore(cairo);
+}
+
+void rounded_rectangle (cairo_t *cairo, uint32_t x, uint32_t y,
+		uint32_t w, uint32_t h, uradii_t *_radii, uint32_t scale)
+{
+	const double degrees = 3.1415927 / 180.0;
+	x *= scale, y *= scale, w *= scale, h *= scale;
+	uradii_t radii = uradii_t_scale(_radii, scale);
+	cairo_new_sub_path(cairo);
+	cairo_arc(cairo, x + w - radii.top_right,    y     + radii.top_right,    radii.top_right,   -90 * degrees,   0 * degrees);
+	cairo_arc(cairo, x + w - radii.bottom_right, y + h - radii.bottom_right, radii.bottom_right,  0 * degrees,  90 * degrees);
+	cairo_arc(cairo, x     + radii.bottom_left,  y + h - radii.bottom_left,  radii.bottom_left,  90 * degrees, 180 * degrees);
+	cairo_arc(cairo, x     + radii.top_left,     y     + radii.top_left,     radii.top_left,    180 * degrees, 270 * degrees);
+	cairo_close_path(cairo);
 }
 

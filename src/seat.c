@@ -1,7 +1,7 @@
 /*
  * LavaLauncher - A simple launcher panel for Wayland
  *
- * Copyright (C) 2020 Leon Henrik Plickat
+ * Copyright (C) 2020 - 2021 Leon Henrik Plickat
  * Copyright (C) 2020 Nicolai Dagestad
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,7 +30,6 @@
 #include<assert.h>
 
 #include<wayland-client.h>
-#include<wayland-client-protocol.h>
 #include<wayland-cursor.h>
 
 #include"wlr-layer-shell-unstable-v1-protocol.h"
@@ -38,7 +37,7 @@
 #include"xdg-shell-protocol.h"
 
 #include"lavalauncher.h"
-#include"str.h"
+#include"util.h"
 #include"seat.h"
 #include"bar.h"
 #include"item.h"
@@ -178,36 +177,30 @@ static void seat_init_keyboard (struct Lava_seat *seat)
  *               *
  *****************/
 static bool create_touchpoint (struct Lava_seat *seat, int32_t id,
-          struct Lava_bar_instance *instance, struct Lava_item *item)
+          struct Lava_bar_instance *instance, struct Lava_item_instance *item_instance)
 {
 	log_message(1, "[seat] Creating touchpoint.\n");
 
 	TRY_NEW(struct Lava_touchpoint, touchpoint, false);
 
-	touchpoint->id       = id;
-	touchpoint->instance = instance;
-	touchpoint->item     = item;
+	touchpoint->id            = id;
+	touchpoint->instance      = instance;
+	touchpoint->item_instance = item_instance;
 
-	touchpoint->indicator = create_indicator(instance);
-	if ( touchpoint->indicator != NULL )
-	{
-		touchpoint->indicator->touchpoint = touchpoint;
-		indicator_set_colour(touchpoint->indicator, &instance->config->indicator_active_colour);
-		move_indicator(touchpoint->indicator, item);
-		indicator_commit(touchpoint->indicator);
-	}
-	else
-		log_message(0, "ERROR: Could not create indicator.\n");
+	item_instance->active_indicator++;
+	item_instance->dirty = true;
 
-	wl_list_insert(&seat->touch.touchpoints, &touchpoint->link);
+	bar_instance_schedule_frame(instance);
 
 	return true;
 }
 
-static void destroy_touchpoint (struct Lava_touchpoint *touchpoint)
+void destroy_touchpoint (struct Lava_touchpoint *touchpoint)
 {
-	DESTROY(touchpoint->indicator, destroy_indicator);
+	counter_safe_subtract(&(touchpoint->item_instance->active_indicator), 1);
+	touchpoint->item_instance->dirty = true;
 	wl_list_remove(&touchpoint->link);
+	bar_instance_schedule_frame(touchpoint->instance);
 	free(touchpoint);
 }
 
@@ -242,7 +235,8 @@ static void touch_handle_up (void *data, struct wl_touch *wl_touch,
 
 	log_message(1, "[input] Touch up.\n");
 
-	item_interaction(touchpoint->item, touchpoint->instance,
+	item_interaction(touchpoint->item_instance->item,
+			touchpoint->instance, seat,
 			INTERACTION_TOUCH,
 			seat->keyboard.modifiers, 0);
 	destroy_touchpoint(touchpoint);
@@ -254,13 +248,15 @@ static void touch_handle_down (void *data, struct wl_touch *wl_touch,
 		wl_fixed_t fx, wl_fixed_t fy)
 {
 	struct Lava_seat *seat = (struct Lava_seat *)data;
-	uint32_t x = (uint32_t)wl_fixed_to_int(fx), y = (uint32_t)wl_fixed_to_int(fy);
+	int32_t x = wl_fixed_to_int(fx), y = wl_fixed_to_int(fy);
 
 	log_message(1, "[input] Touch down: x=%d y=%d\n", x, y);
 
-	struct Lava_bar_instance *instance  = bar_instance_from_surface(surface);
-	struct Lava_item         *item = item_from_coords(instance, x, y);
-	if (! create_touchpoint(seat, id, instance, item))
+	struct Lava_bar_instance  *instance      = bar_instance_from_surface(surface);
+	struct Lava_item_instance *item_instance = bar_instance_get_item_instance_from_coords(instance, x, y);
+	if ( item_instance == NULL )
+		return;
+	if (! create_touchpoint(seat, id, instance, item_instance))
 		log_message(0, "ERROR: could not create touchpoint\n");
 }
 
@@ -277,9 +273,15 @@ static void touch_handle_motion (void *data, struct wl_touch *wl_touch,
 	/* If the item under the touch point is not the same we first touched,
 	 * we simply abort the touch operation.
 	 */
-	uint32_t x = (uint32_t)wl_fixed_to_int(fx), y = (uint32_t)wl_fixed_to_int(fy);
-	if ( item_from_coords(touchpoint->instance, x, y) != touchpoint->item )
+	struct Lava_item_instance *item_instance = bar_instance_get_item_instance_from_coords(
+		touchpoint->instance, wl_fixed_to_int(fx), wl_fixed_to_int(fy));
+	if ( item_instance == NULL )
+	{
 		destroy_touchpoint(touchpoint);
+		return;
+	}
+	if ( item_instance != touchpoint->item_instance )
+		destroy_touchpoint(touchpoint); // TODO [item-rework] move touchpoint instead of killing it
 }
 
 static void touch_handle_cancel (void *raw, struct wl_touch *touch)
@@ -287,10 +289,6 @@ static void touch_handle_cancel (void *raw, struct wl_touch *touch)
 	/* The cancel event means that the compositor has decided to take over
 	 * the touch-input, possibly for gestures, and that therefore we should
 	 * stop caring about all active touchpoints.
-	 *
-	 * The vast majority of such compositor guestures will already be caught
-	 * by touch_handle_motion(), but nothing stops a compositor from having
-	 * "hold for X seconds" as a valid gesture.
 	 */
 
 	struct Lava_seat *seat = (struct Lava_seat *)raw;
@@ -338,32 +336,45 @@ static void seat_init_touch (struct Lava_seat *seat)
  ************/
 static void seat_pointer_unset_cursor (struct Lava_seat *seat)
 {
-	DESTROY_NULL(seat->pointer.cursor_theme, wl_cursor_theme_destroy);
-	DESTROY_NULL(seat->pointer.cursor_surface, wl_surface_destroy);
+	DESTROY_NULL(seat->pointer.cursor.theme, wl_cursor_theme_destroy);
+	DESTROY_NULL(seat->pointer.cursor.surface, wl_surface_destroy);
 
 	 /* These just points back to the theme. */
-	seat->pointer.cursor       = NULL;
-	seat->pointer.cursor_image = NULL;
+	seat->pointer.cursor.wl_cursor = NULL;
+	seat->pointer.cursor.image = NULL;
+
+	seat->pointer.cursor.type = CURSOR_NONE;
 }
 
-static void seat_pointer_set_cursor (struct Lava_seat *seat, uint32_t serial, const char *name)
+static void seat_pointer_set_cursor (struct Lava_seat *seat, uint32_t serial,
+		enum Lava_cursor_type type)
 {
+	if ( type == seat->pointer.cursor.type )
+		return;
+	seat_pointer_unset_cursor(seat);
+	if ( type == CURSOR_NONE )
+		return;
+
+	seat->pointer.cursor.type = type;
+
 	struct wl_pointer *pointer = seat->pointer.wl_pointer;
 
-	int32_t scale       = (int32_t)seat->pointer.instance->output->scale;
-	int32_t cursor_size = 24; // TODO ?
+	const int32_t scale = (int32_t)seat->pointer.instance->output->scale;
+	const int32_t cursor_size = seat->pointer.instance->config->cursor_size;
 
-	/* Cleanup any leftover cursor stuff. */
-	seat_pointer_unset_cursor(seat);
-
-	if ( NULL == (seat->pointer.cursor_theme = wl_cursor_theme_load(NULL, cursor_size * scale, context.shm)) )
+	seat->pointer.cursor.theme = wl_cursor_theme_load(NULL, cursor_size * scale, context.shm);
+	if ( seat->pointer.cursor.theme == NULL )
 	{
 		log_message(0, "ERROR: Could not load cursor theme.\n");
 		return;
 	}
 
-	if ( NULL == (seat->pointer.cursor = wl_cursor_theme_get_cursor(
-					seat->pointer.cursor_theme, name)) )
+	const char *name = type == CURSOR_DEFAULT
+			? str_orelse(seat->pointer.instance->config->cursor_name_default, "default")
+			: str_orelse(seat->pointer.instance->config->cursor_name_hover, "pointer");
+
+	seat->pointer.cursor.wl_cursor = wl_cursor_theme_get_cursor(seat->pointer.cursor.theme, name);
+	if ( seat->pointer.cursor.wl_cursor == NULL )
 	{
 		log_message(0, "WARNING: Could not get cursor \"%s\".\n"
 				"         This cursor is likely missing from your cursor theme.\n",
@@ -372,32 +383,21 @@ static void seat_pointer_set_cursor (struct Lava_seat *seat, uint32_t serial, co
 		return;
 	}
 
-	seat->pointer.cursor_image = seat->pointer.cursor->images[0];
-	assert(seat->pointer.cursor_image); // TODO Propably not needed; A non-fatal fail would be better here anyway
+	seat->pointer.cursor.image = seat->pointer.cursor.wl_cursor->images[0];
+	assert(seat->pointer.cursor.image); // TODO Propably not needed; A non-fatal fail would be better here anyway
 
-	if ( NULL == (seat->pointer.cursor_surface = wl_compositor_create_surface(context.compositor)) )
-	{
-		log_message(0, "ERROR: Could not create cursor surface.\n");
-		seat_pointer_unset_cursor(seat);
-		return;
-	}
-
-	/* The entire dance of getting cursor image and surface and damaging
-	 * the latter is indeed necessary every time a seats pointer enters the
-	 * surface and we want to change its cursor image, because we need to
-	 * apply the scale of the current output to the cursor.
-	 */
-
-	wl_surface_set_buffer_scale(seat->pointer.cursor_surface, scale);
-	wl_surface_attach(seat->pointer.cursor_surface,
-			wl_cursor_image_get_buffer(seat->pointer.cursor_image),
+	seat->pointer.cursor.surface = wl_compositor_create_surface(context.compositor);
+	wl_surface_set_buffer_scale(seat->pointer.cursor.surface, scale);
+	wl_surface_attach(seat->pointer.cursor.surface,
+			wl_cursor_image_get_buffer(seat->pointer.cursor.image),
 			0, 0);
-	wl_surface_damage_buffer(seat->pointer.cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
-	wl_surface_commit(seat->pointer.cursor_surface);
+	wl_surface_damage_buffer(seat->pointer.cursor.surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_commit(seat->pointer.cursor.surface);
+	// TODO how is the thee buffer cleaned up? Investigate wayland-cursor.h
 
-	wl_pointer_set_cursor(pointer, serial, seat->pointer.cursor_surface,
-			(int32_t)seat->pointer.cursor_image->hotspot_x / scale,
-			(int32_t)seat->pointer.cursor_image->hotspot_y / scale);
+	wl_pointer_set_cursor(pointer, serial, seat->pointer.cursor.surface,
+			(int32_t)seat->pointer.cursor.image->hotspot_x / scale,
+			(int32_t)seat->pointer.cursor.image->hotspot_y / scale);
 }
 
 /*************
@@ -411,20 +411,69 @@ static void seat_pointer_set_cursor (struct Lava_seat *seat, uint32_t serial, co
 static void pointer_handle_leave (void *data, struct wl_pointer *wl_pointer,
 		uint32_t serial, struct wl_surface *surface)
 {
+	log_message(1, "[input] Pointer left surface.\n");
+
 	struct Lava_seat *seat = (struct Lava_seat *)data;
 
-	DESTROY(seat->pointer.indicator, destroy_indicator);
+	seat_pointer_unset_cursor(seat);
+
+	/* Clean up indicators. */
+	if ( seat->pointer.item_instance != NULL )
+	{
+		counter_safe_subtract(&(seat->pointer.item_instance->indicator), 1);
+		counter_safe_subtract(&(seat->pointer.item_instance->active_indicator), (uint32_t)seat->pointer.click);
+		seat->pointer.item_instance->dirty = true;
+	}
 
 	struct Lava_bar_instance *instance = seat->pointer.instance;
 
-	seat->pointer.x        = 0;
-	seat->pointer.y        = 0;
-	seat->pointer.instance = NULL;
-	seat->pointer.item     = NULL;
+	seat->pointer.x             = 0;
+	seat->pointer.y             = 0;
+	seat->pointer.instance      = NULL;
+	seat->pointer.item_instance = NULL;
+	seat->pointer.click         = 0;
 
-	bar_instance_pointer_leave(instance);
+	bar_instance_pointer_leave(instance); // TODO [item-rework] instance->hover will be an int instead of bool
+	bar_instance_schedule_frame(instance);
+}
 
-	log_message(1, "[input] Pointer left surface.\n");
+static void pointer_process_motion (struct Lava_seat *seat)
+{
+	struct Lava_item_instance *old_instance = seat->pointer.item_instance;
+	struct Lava_item_instance *new_instance = bar_instance_get_item_instance_from_coords(
+			seat->pointer.instance, (int32_t)seat->pointer.x, (int32_t)seat->pointer.y);
+	seat->pointer.item_instance = new_instance;
+
+	/* Remove indicator from previous item_instance, if exists. */
+	bool need_frame = false;
+	if ( old_instance != NULL )
+	{
+		if ( new_instance == old_instance )
+			return;
+
+		counter_safe_subtract(&(old_instance->indicator), 1);
+		counter_safe_subtract(&(old_instance->active_indicator), (uint32_t)seat->pointer.click);
+		old_instance->dirty = true;
+
+		need_frame = true;
+	}
+
+	if ( new_instance == NULL )
+		seat_pointer_set_cursor(seat, seat->pointer.serial, CURSOR_DEFAULT);
+	else
+	{
+		seat_pointer_set_cursor(seat, seat->pointer.serial,
+				new_instance->item->type == TYPE_BUTTON ? CURSOR_POINTER : CURSOR_DEFAULT);
+
+		new_instance->indicator++;
+		new_instance->active_indicator += (uint32_t)seat->pointer.click;
+		new_instance->dirty = true;
+
+		need_frame = true;
+	}
+
+	if (need_frame)
+		bar_instance_schedule_frame(seat->pointer.instance);
 }
 
 static void pointer_handle_enter (void *data, struct wl_pointer *wl_pointer,
@@ -432,64 +481,34 @@ static void pointer_handle_enter (void *data, struct wl_pointer *wl_pointer,
 		wl_fixed_t x, wl_fixed_t y)
 {
 	struct Lava_seat *seat = (struct Lava_seat *)data;
+	seat->pointer.serial = serial;
 
-	if ( NULL == (seat->pointer.instance = bar_instance_from_surface(surface)) )
+	seat->pointer.instance = bar_instance_from_surface(surface);
+	if ( seat->pointer.instance == NULL )
+	{
+		/* Should be unreachable, but handling this is a good idea for
+		 * debugging.
+		 */
+		log_message(0, "ERROR: Pointer entered unexpected surface.\n");
 		return;
-
-	seat_pointer_set_cursor(seat, serial, str_orelse(seat->pointer.instance->config->cursor_name, "pointer"));
+	}
 
 	bar_instance_pointer_enter(seat->pointer.instance);
 
 	seat->pointer.x = (uint32_t)wl_fixed_to_int(x);
 	seat->pointer.y = (uint32_t)wl_fixed_to_int(y);
-
 	log_message(1, "[input] Pointer entered surface: x=%d y=%d\n",
 				seat->pointer.x, seat->pointer.y);
+	pointer_process_motion(seat);
 }
 
 static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 		uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
 	struct Lava_seat *seat = (struct Lava_seat *)data;
-
 	seat->pointer.x = (uint32_t)wl_fixed_to_int(x);
 	seat->pointer.y = (uint32_t)wl_fixed_to_int(y);
-
-	/* It is enough to only update the indicator every other motion event. */
-	static bool skip = false;
-	if (skip)
-	{
-		skip = false;
-		return;
-	}
-	else
-		skip = true;
-
-	struct Lava_item *item = item_from_coords(seat->pointer.instance,
-			seat->pointer.x, seat->pointer.y);
-
-	if ( item == NULL || item->type != TYPE_BUTTON )
-	{
-		DESTROY(seat->pointer.indicator, destroy_indicator);
-		return;
-	}
-
-	if ( seat->pointer.indicator == NULL )
-	{
-		seat->pointer.indicator = create_indicator(seat->pointer.instance);
-		if ( seat->pointer.indicator == NULL )
-		{
-			log_message(0, "ERROR: Could not create indicator.\n");
-			return;
-		}
-		seat->pointer.indicator->seat = seat;
-
-		indicator_set_colour(seat->pointer.indicator,
-				&seat->pointer.instance->config->indicator_hover_colour);
-	}
-
-	move_indicator(seat->pointer.indicator, item);
-	indicator_commit(seat->pointer.indicator);
+	pointer_process_motion(seat);
 }
 
 static void pointer_handle_button (void *data, struct wl_pointer *wl_pointer,
@@ -498,55 +517,45 @@ static void pointer_handle_button (void *data, struct wl_pointer *wl_pointer,
 	struct Lava_seat *seat = data;
 	if ( seat->pointer.instance == NULL )
 	{
-		log_message(0, "ERROR: Button press could not be handled: "
-				"Bar could not be found.\n");
+		log_message(0, "ERROR: Button press on unexpected surface.\n");
 		return;
 	}
 
-	/* Only interact with the item if the pointer button was pressed and
-	 * released over the same item on the bar.
-	 */
 	if ( button_state == WL_POINTER_BUTTON_STATE_PRESSED )
 	{
-		if ( seat->pointer.indicator != NULL )
-		{
-			indicator_set_colour(seat->pointer.indicator,
-					&seat->pointer.instance->config->indicator_active_colour);
-			indicator_commit(seat->pointer.indicator);
-		}
+		seat->pointer.click++;
 
-		log_message(1, "[input] Button pressed: x=%d y=%d\n",
-					seat->pointer.x, seat->pointer.y);
-		seat->pointer.item = item_from_coords(seat->pointer.instance,
-				seat->pointer.x, seat->pointer.y);
+		log_message(1, "[input] Button pressed: x=%d y=%d click=%d\n",
+					seat->pointer.x, seat->pointer.y,
+					seat->pointer.click);
+
+		if ( seat->pointer.item_instance == NULL )
+			return;
+
+		seat->pointer.item_instance->active_indicator++;
+		seat->pointer.item_instance->dirty = true;
 	}
 	else
 	{
-		if ( seat->pointer.indicator != NULL )
-		{
-			indicator_set_colour(seat->pointer.indicator,
-					&seat->pointer.instance->config->indicator_hover_colour);
-			indicator_commit(seat->pointer.indicator);
-		}
+		seat->pointer.click--;
 
-		log_message(1, "[input] Button released: x=%d y=%d\n",
-					seat->pointer.x, seat->pointer.y);
+		log_message(1, "[input] Button released: x=%d y=%d click=%d\n",
+					seat->pointer.x, seat->pointer.y,
+					seat->pointer.click);
 
-		if ( seat->pointer.item == NULL )
+		if ( seat->pointer.item_instance == NULL )
 			return;
 
-		struct Lava_item *item = item_from_coords(seat->pointer.instance,
-				seat->pointer.x, seat->pointer.y);
+		counter_safe_subtract(&(seat->pointer.item_instance->active_indicator), 1);
+		seat->pointer.item_instance->dirty = true;
 
-		if ( item != seat->pointer.item )
-			return;
-
-		seat->pointer.item = NULL;
-
-		item_interaction(item, seat->pointer.instance,
+		item_interaction(seat->pointer.item_instance->item,
+				seat->pointer.instance, seat,
 				INTERACTION_MOUSE_BUTTON,
 				seat->keyboard.modifiers, button);
 	}
+
+	bar_instance_schedule_frame(seat->pointer.instance);
 }
 
 static void pointer_handle_axis (void *data, struct wl_pointer *wl_pointer,
@@ -559,8 +568,7 @@ static void pointer_handle_axis (void *data, struct wl_pointer *wl_pointer,
 	struct Lava_seat *seat = data;
 	if ( seat->pointer.instance == NULL )
 	{
-		log_message(0, "ERROR: Scrolling could not be handled: "
-				"Bar instance could not be found.\n");
+		log_message(0, "ERROR: Scrolling on unexpected surface.\n");
 		return;
 	}
 
@@ -582,8 +590,7 @@ static void pointer_handle_axis_discrete (void *data,
 	struct Lava_seat *seat = data;
 	if ( seat->pointer.instance == NULL )
 	{
-		log_message(0, "ERROR: Discrete scrolling could not be handled: "
-				"Bar instance could not be found.\n");
+		log_message(0, "ERROR: Scrolling on unexpected surface.\n");
 		return;
 	}
 
@@ -596,6 +603,8 @@ static void pointer_handle_frame (void *data, struct wl_pointer *wl_pointer)
 	if ( seat->pointer.instance == NULL )
 		return;
 
+	if ( seat->pointer.item_instance == NULL )
+		return;
 
 	int value_change;
 	uint32_t direction; /* 0 == down, 1 == up */
@@ -604,13 +613,11 @@ static void pointer_handle_frame (void *data, struct wl_pointer *wl_pointer)
 	else
 		direction = 1, value_change = CONTINUOUS_SCROLL_THRESHHOLD;
 
-	struct Lava_item *item = item_from_coords(seat->pointer.instance,
-			seat->pointer.x, seat->pointer.y);
-
 	if (seat->pointer.discrete_steps)
 	{
 		for (uint32_t i = 0; i < seat->pointer.discrete_steps; i++)
-			item_interaction(item, seat->pointer.instance,
+			item_interaction(seat->pointer.item_instance->item,
+					seat->pointer.instance, seat,
 					INTERACTION_MOUSE_SCROLL,
 					seat->keyboard.modifiers, direction);
 
@@ -619,7 +626,8 @@ static void pointer_handle_frame (void *data, struct wl_pointer *wl_pointer)
 	}
 	else while ( abs(seat->pointer.value) > CONTINUOUS_SCROLL_THRESHHOLD )
 	{
-		item_interaction(item, seat->pointer.instance,
+		item_interaction(seat->pointer.item_instance->item,
+				seat->pointer.instance, seat,
 				INTERACTION_MOUSE_SCROLL,
 				seat->keyboard.modifiers, direction);
 		seat->pointer.value += value_change;
@@ -661,6 +669,15 @@ static const struct wl_pointer_listener pointer_listener = {
 
 static void seat_release_pointer (struct Lava_seat *seat)
 {
+	if ( seat->pointer.item_instance != NULL )
+	{
+		counter_safe_subtract(&(seat->pointer.item_instance->indicator), 1);
+		counter_safe_subtract(&(seat->pointer.item_instance->active_indicator), (uint32_t)seat->pointer.click);
+		seat->pointer.item_instance->dirty = true;
+		bar_instance_schedule_frame(seat->pointer.instance);
+		seat->pointer.item_instance = NULL;
+		seat->pointer.click = 0;
+	}
 	seat_pointer_unset_cursor(seat);
 	DESTROY_NULL(seat->pointer.wl_pointer, wl_pointer_release);
 }
@@ -678,15 +695,17 @@ static void seat_init_pointer (struct Lava_seat *seat)
 	seat->pointer.x                = 0;
 	seat->pointer.y                = 0;
 	seat->pointer.instance         = NULL;
-	seat->pointer.item             = NULL;
+	seat->pointer.item_instance    = NULL;
 	seat->pointer.discrete_steps   = 0;
 	seat->pointer.last_update_time = 0;
 	seat->pointer.value            = wl_fixed_from_int(0);
-	seat->pointer.indicator        = NULL;
-	seat->pointer.cursor_surface   = NULL;
-	seat->pointer.cursor_theme     = NULL;
-	seat->pointer.cursor_image     = NULL;
-	seat->pointer.cursor           = NULL;
+	seat->pointer.click            = 0;
+
+	seat->pointer.cursor.type      = CURSOR_NONE;
+	seat->pointer.cursor.surface   = NULL;
+	seat->pointer.cursor.theme     = NULL;
+	seat->pointer.cursor.image     = NULL;
+	seat->pointer.cursor.wl_cursor = NULL;
 }
 
 /**********
@@ -734,6 +753,7 @@ bool create_seat (struct wl_registry *registry, uint32_t name,
 	wl_seat_add_listener(wl_seat, &seat_listener, seat);
 
 	seat->wl_seat = wl_seat;
+	seat->global_name = name;
 
 	seat_init_touch(seat);
 	seat_init_keyboard(seat);
@@ -744,21 +764,23 @@ bool create_seat (struct wl_registry *registry, uint32_t name,
 	return true;
 }
 
-static void destroy_seat (struct Lava_seat *seat)
+struct Lava_seat *get_seat_from_global_name (uint32_t name)
 {
+	struct Lava_seat *seat, *temp;
+	wl_list_for_each_safe(seat, temp, &context.seats, link)
+		if ( seat->global_name == name )
+			return seat;
+	return NULL;
+}
+
+void destroy_seat (struct Lava_seat *seat)
+{
+	log_message(1, "[seat] Destroying seat.\n");
 	seat_release_keyboard(seat);
 	seat_release_touch(seat);
 	seat_release_pointer(seat);
 	wl_seat_release(seat->wl_seat);
 	wl_list_remove(&seat->link);
 	free(seat);
-}
-
-void destroy_all_seats (void)
-{
-	log_message(1, "[seat] Destroying all seats.\n");
-	struct Lava_seat *seat, *temp;
-	wl_list_for_each_safe(seat, temp, &context.seats, link)
-		destroy_seat(seat);
 }
 

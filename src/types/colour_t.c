@@ -26,15 +26,13 @@
 #include<string.h>
 #include<cairo/cairo.h>
 
-#include"str.h"
+#include"util.h"
 #include"types/colour_t.h"
 
 static bool colour_t_from_hex_string (colour_t *colour, const char *hex)
 {
 	unsigned int r = 0, g = 0, b = 0, a = 255;
-	if ( 4 != sscanf(hex, "#%02x%02x%02x%02x", &r, &g, &b, &a)
-			&& 3 != sscanf(hex, "#%02x%02x%02x", &r, &g, &b)
-			&& 4 != sscanf(hex, "0x%02x%02x%02x%02x", &r, &g, &b, &a)
+	if ( 4 != sscanf(hex, "0x%02x%02x%02x%02x", &r, &g, &b, &a)
 			&& 3 != sscanf(hex, "0x%02x%02x%02x", &r, &g, &b) )
 		return false;
 
@@ -71,11 +69,7 @@ bool colour_t_from_string (colour_t *colour, const char *str)
 	if ( colour == NULL || str == NULL || *str == '\0' )
 		goto error;
 
-	// TODO maybe parse multiple hex codes per Lava_colour for gradients?
-	//      -> "#rrggbbaa-#rrggbbaa" horizontal gradient
-	//      -> "#rrggbbaa|#rrggbbaa" vertical   gradient
-
-	if ( *str == '#' || strstr(str, "0x") == str )
+	if ( strstr(str, "0x") == str )
 	{
 		if (! colour_t_from_hex_string(colour, str))
 			goto error;

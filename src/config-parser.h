@@ -1,7 +1,7 @@
 /*
  * LavaLauncher - A simple launcher panel for Wayland
  *
- * Copyright (C) 2020 - 2021 Leon Henrik Plickat
+ * Copyright (C) 2020 Leon Henrik Plickat
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,32 +17,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef LAVALAUNCHER_EVENT_LOOP_H
-#define LAVALAUNCHER_EVENT_LOOP_H
+#ifndef LAVALAUNCHER_CONFIG_H
+#define LAVALAUNCHER_CONFIG_H
 
 #include<stdbool.h>
-#include<stdint.h>
-#include<poll.h>
 
-struct Lava_event_source
-{
-	bool (*init)(struct pollfd *);
-	bool (*finish)(struct pollfd *);
-	bool (*flush)(struct pollfd *);
-	bool (*handle_in)(struct pollfd *);
-	bool (*handle_out)(struct pollfd *);
-};
-
-struct Lava_event_loop
-{
-	nfds_t fd_count, capacity;
-	struct Lava_event_source *sources;
-};
-
-bool event_loop_init (struct Lava_event_loop *loop, nfds_t capacity);
-void event_loop_add_event_source (struct Lava_event_loop *loop, struct Lava_event_source *source);
-bool event_loop_run (struct  Lava_event_loop *loop);
-void event_loop_finish (struct Lava_event_loop *loop);
+bool parse_config_file (void);
 
 #endif
 

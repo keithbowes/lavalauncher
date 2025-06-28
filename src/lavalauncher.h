@@ -24,48 +24,17 @@
 #include<stdint.h>
 #include<wayland-client.h>
 
-/* Helper macro to iterate over a struct array. */
-#define FOR_ARRAY(A, B) for (size_t B = 0; B < (sizeof(A) / sizeof(A[0])); B++)
-
-/* Helper macro to reduce error handling boiler plate code. */
-#define TRY(A) \
-	{ \
-		if (A)\
-			return true; \
-		goto error; \
-	}
-
-/* Helper macro to try allocate something. */
-#define TRY_NEW(A, B, C) \
-	A *B = calloc(1, sizeof(A)); \
-	if ( B == NULL ) \
-	{ \
-		log_message(0, "ERROR: Can not allocate.\n"); \
-		return C; \
-	}
-
-/* Helper macro to destroy something if it is not NULL. */
-#define DESTROY(A, B) \
-	if ( A != NULL ) \
-	{ \
-		B(A); \
-	}
-
-/* Helper macro to destroy something and set it to NULL if it is not NULL. */
-#define DESTROY_NULL(A, B) \
-	if ( A != NULL ) \
-	{ \
-		B(A); \
-		A = NULL; \
-	}
+#include "wlr-foreign-toplevel-management-unstable-v1-protocol.h"
+#include "wlr-layer-shell-unstable-v1-protocol.h"
 
 struct Lava_item;
 struct Lava_bar;
 
 struct Lava_context
 {
-	struct wl_display             *display;
-	struct wl_registry            *registry;
+	struct wl_display  *display;
+	struct wl_registry *registry;
+	struct wl_callback *sync;
 
 	/* Wayland interfaces */
 	struct wl_compositor          *compositor;
@@ -77,6 +46,9 @@ struct Lava_context
 	/* Optional Wayland interfaces */
 	struct zriver_status_manager_v1 *river_status_manager;
 	bool need_river_status;
+	struct zwlr_foreign_toplevel_manager_v1 *foreign_toplevel_manager;
+	struct wl_list toplevels;
+	bool need_foreign_toplevel;
 
 	/* Which input devices do we need? */
 	bool need_keyboard;
@@ -85,11 +57,15 @@ struct Lava_context
 
 	char *config_path;
 
-	struct wl_list bars;
-	struct Lava_bar *last_bar;
-
 	struct wl_list outputs;
 	struct wl_list seats;
+
+	struct wl_list items;
+	struct Lava_item *last_item;
+	int item_amount;
+
+	struct wl_list configs;
+	struct Lava_bar_configuration *default_config, *last_config;
 
 	bool loop;
 	bool reload;
@@ -104,3 +80,4 @@ struct Lava_context
 extern struct Lava_context context;
 
 #endif
+

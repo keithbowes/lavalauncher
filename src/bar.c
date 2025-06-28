@@ -1,7 +1,7 @@
 /*
  * LavaLauncher - A simple launcher panel for Wayland
  *
- * Copyright (C) 2020 Leon Henrik Plickat
+ * Copyright (C) 2020 - 2021 Leon Henrik Plickat
  * Copyright (C) 2020 Nicolai Dagestad
  *
  * This program is free software: you can redistribute it and/or modify
@@ -28,25 +28,26 @@
 #include<assert.h>
 #include<ctype.h>
 
-#include<wayland-server.h>
 #include<wayland-client.h>
-#include<wayland-client-protocol.h>
 
 #include"wlr-layer-shell-unstable-v1-protocol.h"
 
 #include"lavalauncher.h"
-#include"str.h"
-#include"config.h"
+#include"util.h"
+#include"config-parser.h"
 #include"seat.h"
 #include"item.h"
 #include"output.h"
 #include"bar.h"
+#include"foreign-toplevel-management.h"
 #include"types/colour_t.h"
 #include"types/box_t.h"
 
-/*************************
- * Bar configuration set *
- *************************/
+/***************************
+ *                         *
+ *  Bar configuration set  *
+ *                         *
+ ***************************/
 static void bar_config_sensible_defaults (struct Lava_bar_configuration *config)
 {
 	config->position  = POSITION_BOTTOM;
@@ -60,22 +61,37 @@ static void bar_config_sensible_defaults (struct Lava_bar_configuration *config)
 	config->icon_padding      = 4;
 	config->exclusive_zone    = 1;
 	config->indicator_padding = 0;
-	config->indicator_style   = STYLE_ROUNDED_RECTANGLE;
 
 	udirections_t_set_all(&config->border, 1);
 	udirections_t_set_all(&config->margin, 0);
 	uradii_t_set_all(&config->radii, 5);
 
-	colour_t_from_string(&config->bar_colour, "#000000");
-	colour_t_from_string(&config->border_colour, "#ffffff");
-	colour_t_from_string(&config->indicator_hover_colour, "#404040");
-	colour_t_from_string(&config->indicator_active_colour, "#606060");
+	colour_t_from_string(&config->bar_colour, "0x000000");
+	colour_t_from_string(&config->border_colour, "0xffffff");
+	colour_t_from_string(&config->indicator_hover_colour, "0x404040");
+	colour_t_from_string(&config->indicator_active_colour, "0x606060");
 
 	config->condition_scale      = 0;
 	config->condition_transform  = -1;
 	config->condition_resolution = RESOLUTION_ALL;
 
-	config->cursor_name = NULL;
+	config->cursor_name_default = NULL;
+	config->cursor_name_hover = NULL;
+
+	/* Use XCURSOR_SIZE if it exists. */
+	const char *cursor_size = getenv("XCURSOR_SIZE");
+	if ( cursor_size == NULL )
+		config->cursor_size = 24;
+	else
+	{
+		config->cursor_size = atoi(cursor_size);
+		if ( config->cursor_size < 24 )
+		{
+			log_message(0, "WARNING: Invalid $XCURSOR_SIZE. Defaulting to 24.\n");
+			config->cursor_size = 24;
+		}
+	}
+
 	config->only_output = NULL;
 	config->namespace   = NULL;
 }
@@ -89,44 +105,48 @@ static void bar_config_copy_settings (struct Lava_bar_configuration *config,
 	 * To make later logic simpler, every configuration set should have their
 	 * own copy of the string.
 	 */
-	if ( config->cursor_name != NULL )
-		config->cursor_name = strdup(default_config->cursor_name);
+	if ( config->cursor_name_default != NULL )
+		config->cursor_name_default = strdup(default_config->cursor_name_default);
+	if ( config->cursor_name_hover != NULL )
+		config->cursor_name_hover = strdup(default_config->cursor_name_hover);
 	if ( config->only_output != NULL )
 		config->only_output = strdup(default_config->only_output);
 	if ( config->namespace  != NULL )
 		config->namespace  = strdup(default_config->namespace);
 }
 
-bool create_bar_config (struct Lava_bar *bar, bool default_config)
+bool create_bar_config (void)
 {
 	TRY_NEW(struct Lava_bar_configuration, config, false);
 
-	if (default_config)
+	/* First config will automatically be the default one. */
+	if ( context.default_config == NULL )
 	{
-		bar->default_config = config;
+		context.default_config = config;
 		bar_config_sensible_defaults(config);
 	}
 	else
-		bar_config_copy_settings(config, bar->default_config);
+		bar_config_copy_settings(config, context.default_config);
 
-	bar->last_config = config;
+	context.last_config = config;
 
-	wl_list_insert(&bar->configs, &config->link);
+	wl_list_insert(&context.configs, &config->link);
 	return true;
 }
 
 static void destroy_bar_config (struct Lava_bar_configuration *config)
 {
-	free_if_set(config->cursor_name);
+	free_if_set(config->cursor_name_default);
+	free_if_set(config->cursor_name_hover);
 	free_if_set(config->only_output);
 	free_if_set(config->namespace);
 	free(config);
 }
 
-static void destroy_all_bar_configs (struct Lava_bar *bar)
+void destroy_all_bar_configs (void)
 {
 	struct Lava_bar_configuration *config, *temp;
-	wl_list_for_each_safe(config, temp, &bar->configs, link)
+	wl_list_for_each_safe(config, temp, &context.configs, link)
 		destroy_bar_config(config);
 }
 
@@ -159,11 +179,20 @@ static void finalize_bar_config (struct Lava_bar_configuration *config)
 	}
 }
 
-static void finalize_all_bar_configs (struct Lava_bar *bar)
+bool finalize_all_bar_configs (void)
 {
+	/* No bar configuration? Then add a default one. */
+	if ( wl_list_length(&context.configs) == 0 )
+	{
+		log_message(1, "[bar] No bar configuration, creating default.\n");
+		if (! create_bar_config())
+			return false;
+	}
+
 	struct Lava_bar_configuration *config;
-	wl_list_for_each(config, &bar->configs, link)
+	wl_list_for_each(config, &context.configs, link)
 		finalize_bar_config(config);
+	return true;
 }
 
 static bool bar_config_conditions_match_output (struct Lava_bar_configuration *config,
@@ -189,66 +218,13 @@ static bool bar_config_conditions_match_output (struct Lava_bar_configuration *c
 	return true;
 }
 
-struct Lava_bar_configuration *get_bar_config_for_output (struct Lava_bar *bar, struct Lava_output *output)
+struct Lava_bar_configuration *get_bar_config_for_output (struct Lava_output *output)
 {
 	struct Lava_bar_configuration *config;
-	wl_list_for_each(config, &bar->configs, link)
+	wl_list_for_each_reverse(config, &context.configs, link)
 		if (bar_config_conditions_match_output(config, output))
 			return config;
 	return NULL;
-}
-
-
-/***************
- * Logical bar *
- * *************/
-bool create_bar (void)
-{
-	TRY_NEW(struct Lava_bar, bar, false);
-
-	bar->last_item      = NULL;
-	bar->last_config    = NULL;
-	bar->default_config = NULL;
-
-	wl_list_init(&bar->items);
-	wl_list_init(&bar->configs);
-
-	/* Create default configuration. */
-	if (! create_bar_config(bar, true))
-	{
-		free(bar);
-		return false;
-	}
-
-	wl_list_insert(&context.bars, &bar->link);
-	context.last_bar = bar;
-
-	return true;
-}
-
-bool finalize_bar (struct Lava_bar *bar)
-{
-	log_message(1, "[bar] Finalize bar.\n");
-	if (! finalize_items(bar))
-		return false;
-	finalize_all_bar_configs(bar);
-	return true;
-}
-
-static void destroy_bar (struct Lava_bar *bar)
-{
-	wl_list_remove(&bar->link);
-	destroy_all_items(bar);
-	destroy_all_bar_configs(bar);
-	free(bar);
-}
-
-void destroy_all_bars (void)
-{
-	log_message(1, "[bar] Destroying all bars.\n");
-	struct Lava_bar *bar, *temp;
-	wl_list_for_each_safe(bar, temp, &context.bars, link)
-		destroy_bar(bar);
 }
 
 /***********************
@@ -269,35 +245,15 @@ void destroy_all_bars (void)
 		return true; \
 	}
 
-static uint32_t bar_config_count_args (const char *arg)
-{
-	uint32_t args = 0;
-	bool on_arg = false;
-	for (const char *i = arg; *i != '\0'; i++)
-	{
-		if (isspace(*i))
-		{
-			if (on_arg)
-				on_arg = false;
-		}
-		else if (! on_arg)
-		{
-			on_arg = true;
-			args++;
-		}
-	}
-	return args;
-}
-
 static bool bar_config_directional_config (uint32_t *_a, uint32_t *_b, uint32_t *_c, uint32_t *_d,
 		const char *arg, const char *conf_name, const char *conf_name_2)
 {
 	int32_t a, b, c, d;
 
-	if ( 4 == bar_config_count_args(arg) && 4 == sscanf(arg, "%d %d %d %d", &a, &b, &c, &d) )
+	if ( 4 == count_tokens(arg) && 4 == sscanf(arg, "%d %d %d %d", &a, &b, &c, &d) )
 		goto done;
 
-	if ( 1 == bar_config_count_args(arg) && 1 == sscanf(arg, "%d", &d) )
+	if ( 1 == count_tokens(arg) && 1 == sscanf(arg, "%d", &d) )
 	{
 		a = b = c = d;
 		goto done;
@@ -323,13 +279,25 @@ done:
 	return true;
 }
 
-BAR_CONFIG_STRING(bar_config_set_cursor_name, cursor_name)
+BAR_CONFIG_STRING(bar_config_set_cursor_name_default, cursor_name_default)
+BAR_CONFIG_STRING(bar_config_set_cursor_name_hover, cursor_name_hover)
 BAR_CONFIG_STRING(bar_config_set_namespace, namespace)
 
 BAR_CONFIG_COLOUR(bar_config_set_bar_colour, bar_colour)
 BAR_CONFIG_COLOUR(bar_config_set_border_colour, border_colour)
 BAR_CONFIG_COLOUR(bar_config_set_indicator_colour_active, indicator_active_colour)
 BAR_CONFIG_COLOUR(bar_config_set_indicator_colour_hover, indicator_hover_colour)
+
+BAR_CONFIG(bar_config_set_cursor_size)
+{
+	config->cursor_size = atoi(arg);
+	if ( config->cursor_size < 24 )
+	{
+		log_message(0, "ERROR: Cursor size must be at least 24.\n");
+		return false;
+	}
+	return true;
+}
 
 BAR_CONFIG(bar_config_set_only_output)
 {
@@ -579,30 +547,12 @@ BAR_CONFIG(bar_config_set_indicator_padding)
 	return true;
 }
 
-BAR_CONFIG(bar_config_set_indicator_style)
-{
-	if (! strcmp(arg, "rectangle"))
-		config->indicator_style = STYLE_RECTANGLE;
-	else if (! strcmp(arg, "rounded-rectangle"))
-		config->indicator_style = STYLE_ROUNDED_RECTANGLE;
-	else if (! strcmp(arg, "circle"))
-		config->indicator_style = STYLE_CIRCLE;
-	else
-	{
-		log_message(0, "ERROR: Unrecognized indicator style \"%s\".\n"
-				"INFO: Possible styles are 'rectangle', "
-				"'rounded-rectangle' and 'circle'.\n", arg);
-		return false;
-	}
-	return true;
-}
-
 #undef BAR_CONFIG
 #undef BAR_CONFIG_STRING
 #undef BAR_CONFIG_COLOUR
 
 bool bar_config_set_variable (struct Lava_bar_configuration *config,
-		const char *variable, const char *value, int line)
+		const char *variable, const char *value, uint32_t line)
 {
 	struct
 	{
@@ -616,7 +566,9 @@ bool bar_config_set_variable (struct Lava_bar_configuration *config,
 		{ .variable = "condition-resolution",    .set = bar_config_set_condition_resolution    },
 		{ .variable = "condition-scale",         .set = bar_config_set_condition_scale         },
 		{ .variable = "condition-transform",     .set = bar_config_set_condition_transform     },
-		{ .variable = "cursor-name",             .set = bar_config_set_cursor_name             },
+		{ .variable = "cursor-default",          .set = bar_config_set_cursor_name_default     },
+		{ .variable = "cursor-hover",            .set = bar_config_set_cursor_name_hover       },
+		{ .variable = "cursor-size",             .set = bar_config_set_cursor_size             },
 		{ .variable = "exclusive-zone",          .set = bar_config_set_exclusive_zone          },
 		{ .variable = "hidden-size",             .set = bar_config_set_hidden_size             },
 		{ .variable = "hidden-mode",             .set = bar_config_set_hidden_mode             },
@@ -624,7 +576,6 @@ bool bar_config_set_variable (struct Lava_bar_configuration *config,
 		{ .variable = "indicator-active-colour", .set = bar_config_set_indicator_colour_active },
 		{ .variable = "indicator-hover-colour",  .set = bar_config_set_indicator_colour_hover  },
 		{ .variable = "indicator-padding",       .set = bar_config_set_indicator_padding       },
-		{ .variable = "indicator-style",         .set = bar_config_set_indicator_style,        },
 		{ .variable = "layer",                   .set = bar_config_set_layer                   },
 		{ .variable = "margin",                  .set = bar_config_set_margin_size             },
 		{ .variable = "mode",                    .set = bar_config_set_mode                    },
@@ -649,193 +600,14 @@ exit:
 	return false;
 }
 
-/********************************
- * Generic cairo draw functions *
- ********************************/
-static void circle (cairo_t *cairo, uint32_t x, uint32_t y, uint32_t size)
-{
-	cairo_arc(cairo, x + (size/2.0), y + (size/2.0), size / 2.0, 0, 2 * 3.1415927);
-}
-
-static void rounded_rectangle (cairo_t *cairo, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uradii_t *radii)
-{
-	double degrees = 3.1415927 / 180.0;
-	cairo_new_sub_path(cairo);
-	cairo_arc(cairo, x + w - radii->top_right,    y     + radii->top_right,    radii->top_right,   -90 * degrees,   0 * degrees);
-	cairo_arc(cairo, x + w - radii->bottom_right, y + h - radii->bottom_right, radii->bottom_right,  0 * degrees,  90 * degrees);
-	cairo_arc(cairo, x     + radii->bottom_left,  y + h - radii->bottom_left,  radii->bottom_left,  90 * degrees, 180 * degrees);
-	cairo_arc(cairo, x     + radii->top_left,     y     + radii->top_left,     radii->top_left,    180 * degrees, 270 * degrees);
-	cairo_close_path(cairo);
-}
-
-static void clear_buffer (cairo_t *cairo)
-{
-	cairo_save(cairo);
-	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
-	cairo_paint(cairo);
-	cairo_restore(cairo);
-}
-
-/**************
- * Indicators *
- **************/
-void destroy_indicator (struct Lava_item_indicator *indicator)
-{
-	DESTROY(indicator->indicator_subsurface, wl_subsurface_destroy);
-	DESTROY(indicator->indicator_surface, wl_surface_destroy);
-
-	/* Cleanup in the parent. */
-	if ( indicator->seat != NULL )
-		indicator->seat->pointer.indicator = NULL;
-	if ( indicator->touchpoint != NULL )
-		indicator->touchpoint->indicator = NULL;
-
-	finish_buffer(&indicator->indicator_buffers[0]);
-	finish_buffer(&indicator->indicator_buffers[1]);
-
-	wl_surface_commit(indicator->instance->bar_surface);
-	wl_list_remove(&indicator->link);
-	free(indicator);
-}
-
-struct Lava_item_indicator *create_indicator (struct Lava_bar_instance *instance)
-{
-	TRY_NEW(struct Lava_item_indicator, indicator, NULL);
-
-	wl_list_insert(&instance->indicators, &indicator->link);
-
-	indicator->seat       = NULL;
-	indicator->touchpoint = NULL;
-	indicator->instance   = instance;
-
-	if ( NULL == (indicator->indicator_surface = wl_compositor_create_surface(context.compositor)) )
-	{
-		log_message(0, "ERROR: Compositor did not create wl_surface.\n");
-		goto error;
-	}
-	if ( NULL == (indicator->indicator_subsurface = wl_subcompositor_get_subsurface(
-					context.subcompositor, indicator->indicator_surface,
-					instance->bar_surface)) )
-	{
-		log_message(0, "ERROR: Compositor did not create wl_subsurface.\n");
-		goto error;
-	}
-
-	wl_subsurface_place_below(indicator->indicator_subsurface, instance->icon_surface);
-	wl_subsurface_set_position(indicator->indicator_subsurface, 0, 0);
-
-	struct wl_region *region = wl_compositor_create_region(context.compositor);
-	wl_surface_set_input_region(indicator->indicator_surface, region);
-	wl_region_destroy(region);
-
-	return indicator;
-
-error:
-	destroy_indicator(indicator);
-	return NULL;
-}
-
-void indicator_set_colour (struct Lava_item_indicator *indicator, colour_t *colour)
-{
-	struct Lava_bar_instance      *instance = indicator->instance;
-	struct Lava_bar_configuration *config   = instance->config;
-	uint32_t                       scale    = instance->output->scale;
-
-	uint32_t buffer_size = config->size - (2 * config->indicator_padding);
-	buffer_size *= scale;
-
-	/* Get new/next buffer. */
-	if (! next_buffer(&indicator->current_indicator_buffer,
-				context.shm, indicator->indicator_buffers,
-				buffer_size, buffer_size))
-	{
-		destroy_indicator(indicator);
-		return;
-	}
-
-	cairo_t *cairo = indicator->current_indicator_buffer->cairo;
-	clear_buffer(cairo);
-	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
-
-	switch (config->indicator_style)
-	{
-		case STYLE_RECTANGLE:
-			/* Cairo implicitly fills everything if no shape has been drawn. */
-			cairo_rectangle(cairo, 0, 0, buffer_size, buffer_size);
-			break;
-
-		case STYLE_ROUNDED_RECTANGLE:
-			rounded_rectangle(cairo, 0, 0, buffer_size, buffer_size, &config->radii);
-			break;
-
-		case STYLE_CIRCLE:
-			circle(cairo, 0, 0, buffer_size);
-			break;
-	}
-
-	colour_t_set_cairo_source(cairo, colour);
-	cairo_fill(cairo);
-
-	wl_surface_set_buffer_scale(indicator->indicator_surface, (int32_t)scale);
-	wl_surface_attach(indicator->indicator_surface,
-			indicator->current_indicator_buffer->buffer, 0, 0);
-	wl_surface_damage_buffer(indicator->indicator_surface, 0, 0, INT32_MAX, INT32_MAX);
-}
-
-void move_indicator (struct Lava_item_indicator *indicator, struct Lava_item *item)
-{
-	struct Lava_bar_instance      *instance = indicator->instance;
-	struct Lava_bar_configuration *config   = instance->config;
-
-	int32_t x = (int32_t)(instance->item_area_dim.x + config->indicator_padding);
-	int32_t y = (int32_t)(instance->item_area_dim.y + config->indicator_padding);
-	if ( config->orientation == ORIENTATION_HORIZONTAL )
-		x += (int32_t)item->ordinate;
-	else
-		y += (int32_t)item->ordinate;
-
-	wl_subsurface_set_position(indicator->indicator_subsurface, x, y);
-}
-
-void indicator_commit (struct Lava_item_indicator *indicator)
-{
-	wl_surface_commit(indicator->indicator_surface);
-	wl_surface_commit(indicator->instance->bar_surface);
-}
-
-/****************
- * Bar instance *
- ****************/
-static void draw_items (struct Lava_bar_instance *instance, cairo_t *cairo)
-{
-	struct Lava_bar_configuration *config = instance->config;
-	struct Lava_bar               *bar    = instance->bar;
-
-	uint32_t scale = instance->output->scale;
-	uint32_t size = config->size * scale;
-	uint32_t *increment, increment_offset;
-	uint32_t x = 0, y = 0;
-	if ( config->orientation == ORIENTATION_HORIZONTAL )
-		increment = &x, increment_offset = x;
-	else
-		increment = &y, increment_offset = y;
-
-	struct Lava_item *item;
-	wl_list_for_each_reverse(item, &bar->items, link) if ( item->type == TYPE_BUTTON )
-	{
-		*increment = (item->ordinate * scale) + increment_offset;
-		if ( item->img != NULL )
-			image_t_draw_to_cairo(cairo, item->img,
-					x + config->icon_padding,
-					y + config->icon_padding,
-					size - (2 * config->icon_padding),
-					size - (2 * config->icon_padding));
-	}
-}
-
+/******************
+ *                *
+ *  Bar instance  *
+ *                *
+ ******************/
 /* Draw a rectangle with configurable borders and corners. */
-void draw_bar_background (cairo_t *cairo, ubox_t *_dim, udirections_t *_border, uradii_t *_radii,
-		uint32_t scale, colour_t *bar_colour, colour_t *border_colour)
+static void draw_bar_background (cairo_t *cairo, ubox_t *_dim, udirections_t *_border,
+		uradii_t *_radii, colour_t *bar_colour, colour_t *border_colour, uint32_t scale)
 {
 	ubox_t        dim    = ubox_t_scale(_dim, scale);
 	udirections_t border = udirections_t_scale(_border, scale);
@@ -892,17 +664,17 @@ void draw_bar_background (cairo_t *cairo, ubox_t *_dim, udirections_t *_border, 
 	{
 		if ( border.top == 0 && border.bottom == 0 && border.left == 0 && border.right == 0 )
 		{
-			rounded_rectangle(cairo, dim.x, dim.y, dim.w, dim.h, &radii);
+			rounded_rectangle(cairo, dim.x, dim.y, dim.w, dim.h, &radii, 1);
 			colour_t_set_cairo_source(cairo, bar_colour);
 			cairo_fill(cairo);
 		}
 		else
 		{
-			rounded_rectangle(cairo, dim.x, dim.y, dim.w, dim.h, &radii);
+			rounded_rectangle(cairo, dim.x, dim.y, dim.w, dim.h, &radii, 1);
 			colour_t_set_cairo_source(cairo, border_colour);
 			cairo_fill(cairo);
 
-			rounded_rectangle(cairo, center.x, center.y, center.w, center.h, &radii);
+			rounded_rectangle(cairo, center.x, center.y, center.w, center.h, &radii, 1);
 			colour_t_set_cairo_source(cairo, bar_colour);
 			cairo_fill(cairo);
 		}
@@ -911,68 +683,87 @@ void draw_bar_background (cairo_t *cairo, ubox_t *_dim, udirections_t *_border, 
 	cairo_restore(cairo);
 }
 
-static void bar_instance_render_icon_frame (struct Lava_bar_instance *instance)
+static void bar_instance_next_background_frame (struct Lava_bar_instance *instance)
 {
-	struct Lava_output *output  = instance->output;
-	uint32_t            scale   = output->scale;
+	log_message(2, "[bar] Render bar background frame: global_name=%d\n", instance->output->global_name);
 
-	log_message(2, "[bar] Render icon frame: global_name=%d\n",
-			instance->output->global_name);
-
-	/* Get new/next buffer. */
-	if (! next_buffer(&instance->current_icon_buffer, context.shm, instance->icon_buffers,
-				instance->item_area_dim.w  * scale, instance->item_area_dim.h * scale))
-		return;
-
-	cairo_t *cairo = instance->current_icon_buffer->cairo;
-	clear_buffer(cairo);
-
-	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
-
-	/* Draw icons. */
-	if (! instance->hidden)
-		draw_items(instance, cairo);
-
-	wl_surface_set_buffer_scale(instance->icon_surface, (int32_t)scale);
-	wl_surface_attach(instance->icon_surface, instance->current_icon_buffer->buffer, 0, 0);
-	wl_surface_damage_buffer(instance->icon_surface, 0, 0, INT32_MAX, INT32_MAX);
-}
-
-static void bar_instance_render_background_frame (struct Lava_bar_instance *instance)
-{
 	struct Lava_bar_configuration *config = instance->config;
-	struct Lava_output            *output = instance->output;
-	uint32_t                       scale  = output->scale;
+	const uint32_t scale = instance->output->scale;
 
-	ubox_t *buffer_dim, *bar_dim;
 	if (instance->hidden)
-		buffer_dim = &instance->surface_hidden_dim, bar_dim = &instance->bar_hidden_dim;
-	else
-		buffer_dim = &instance->surface_dim, bar_dim = &instance->bar_dim;
-
-	log_message(2, "[bar] Render bar frame: global_name=%d\n", instance->output->global_name);
-
-	/* Get new/next buffer. */
-	if (! next_buffer(&instance->current_bar_buffer, context.shm, instance->bar_buffers,
-				buffer_dim->w  * scale, buffer_dim->h * scale))
+	{
+		if (! next_buffer(&instance->current_buffer, context.shm, instance->buffers,
+				instance->surface_hidden_dim.w, instance->surface_hidden_dim.h))
 		return;
 
-	cairo_t *cairo = instance->current_bar_buffer->cairo;
-	clear_buffer(cairo);
+		cairo_t *cairo = instance->current_buffer->cairo;
+		clear_cairo_buffer(cairo);
 
-	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
-
-	/* Draw bar. */
-	if (! instance->hidden)
-	{
-		log_message(2, "[bar] Drawing bar background.\n");
-		draw_bar_background(cairo, bar_dim, &config->border, &config->radii,
-				scale, &config->bar_colour, &config->border_colour);
+		goto attach;
 	}
 
-	wl_surface_set_buffer_scale(instance->bar_surface, (int32_t)scale);
-	wl_surface_attach(instance->bar_surface, instance->current_bar_buffer->buffer, 0, 0);
-	wl_surface_damage_buffer(instance->bar_surface, 0, 0, INT32_MAX, INT32_MAX);
+	if (! next_buffer(&instance->current_buffer, context.shm, instance->buffers,
+			instance->surface_dim.w * scale, instance->surface_dim.h * scale))
+		return;
+
+	cairo_t *cairo = instance->current_buffer->cairo;
+	clear_cairo_buffer(cairo);
+
+	/* Draw background an border */
+	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
+	draw_bar_background(cairo, &instance->bar_dim, &config->border, &config->radii,
+			&config->bar_colour, &config->border_colour, scale);
+
+attach:
+	wl_surface_damage_buffer(instance->wl_surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_set_buffer_scale(instance->wl_surface, (int32_t)scale);
+	wl_surface_attach(instance->wl_surface, instance->current_buffer->buffer, 0, 0);
+}
+
+static void bar_instance_draw (struct Lava_bar_instance *instance)
+{
+	for (int i = 0; i < context.item_amount; i++)
+		if (instance->item_instances[i].dirty)
+		{
+			instance->item_instances[i].dirty = false;
+			item_instance_next_frame(&(instance->item_instances[i]));
+		}
+	if (instance->background_dirty)
+	{
+		instance->background_dirty = false;
+		bar_instance_next_background_frame(instance);
+	}
+}
+
+static void frame_callback_handle_done (void *data, struct wl_callback *wl_callback, uint32_t time)
+{
+	struct Lava_bar_instance *instance = (struct Lava_bar_instance *)data;
+	wl_callback_destroy(wl_callback);
+	instance->frame_callback = NULL;
+
+	log_message(2, "[bar] Frame callback received: global_name=%d\n",
+			instance->output->global_name);
+
+	/* There are no frame callbacks for the surfaces of the item instances.
+	 * A single callback for the parent surface should be enough for our use
+	 * case.
+	 */
+	bar_instance_draw(instance);
+
+	wl_surface_commit(instance->wl_surface);
+}
+
+static const struct wl_callback_listener frame_callback_listener = {
+	.done = frame_callback_handle_done,
+};
+
+void bar_instance_schedule_frame (struct Lava_bar_instance *instance)
+{
+	if ( instance->frame_callback != NULL )
+		return;
+	instance->frame_callback = wl_surface_frame(instance->wl_surface);
+	wl_callback_add_listener(instance->frame_callback, &frame_callback_listener, instance);
+	wl_surface_commit(instance->wl_surface);
 }
 
 static uint32_t get_anchor (struct Lava_bar_configuration *config)
@@ -1030,13 +821,13 @@ static void bar_instance_configure_layer_surface (struct Lava_bar_instance *inst
 	log_message(1, "[bar] Configuring bar instance: global_name=%d\n",
 			instance->output->global_name);
 
-	ubox_t *buffer_dim, *bar_dim;
+	ubox_t *surface_dim, *bar_dim;
 	if (instance->hidden)
-		buffer_dim = &instance->surface_hidden_dim, bar_dim = &instance->bar_hidden_dim;
+		surface_dim = &instance->surface_hidden_dim, bar_dim = &instance->bar_hidden_dim;
 	else
-		buffer_dim = &instance->surface_dim, bar_dim = &instance->bar_dim;
+		surface_dim = &instance->surface_dim, bar_dim = &instance->bar_dim;
 
-	zwlr_layer_surface_v1_set_size(instance->layer_surface, buffer_dim->w, buffer_dim->h);
+	zwlr_layer_surface_v1_set_size(instance->layer_surface, surface_dim->w, surface_dim->h);
 
 	/* Anchor the surface to the correct edge. */
 	zwlr_layer_surface_v1_set_anchor(instance->layer_surface, get_anchor(config));
@@ -1059,34 +850,36 @@ static void bar_instance_configure_layer_surface (struct Lava_bar_instance *inst
 	if ( config->exclusive_zone == 1 )
 	{
 		if ( config->orientation == ORIENTATION_HORIZONTAL )
-			exclusive_zone = (int32_t)buffer_dim->h;
+			exclusive_zone = (int32_t)surface_dim->h;
 		else
-			exclusive_zone = (int32_t)buffer_dim->w;
+			exclusive_zone = (int32_t)surface_dim->w;
 	}
 	else
 		exclusive_zone = config->exclusive_zone;
 	zwlr_layer_surface_v1_set_exclusive_zone(instance->layer_surface,
 			exclusive_zone);
 
-	if ( context.need_keyboard == true )
-		zwlr_layer_surface_v1_set_keyboard_interactivity(instance->layer_surface,
-				ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
-
-	/* Create a region of the visible part of the surface.
-	 * Behold: In MODE_AGGRESSIVE, the actual surface is larger than the visible bar.
+	/* In MODE_FULL the actual surface can be larger than the visible bar if
+	 * margins parallell to the bars orientation are used. In that case we
+	 * have to set the input region so the unused parts of the buffer do not
+	 * receive pointer/touch input.
 	 */
-	struct wl_region *region = wl_compositor_create_region(context.compositor);
-	wl_region_add(region, (int32_t)instance->bar_dim.x, (int32_t)instance->bar_dim.y,
-			(int32_t)bar_dim->w, (int32_t)bar_dim->h);
+	if ( config->mode == MODE_FULL )
+	{
+		if ( config->orientation == ORIENTATION_HORIZONTAL
+				&& config->margin.left == 0 && config->margin.right == 0 )
+			return;
+		if ( config->orientation == ORIENTATION_VERTICAL
+				&& config->margin.top == 0 && config->margin.bottom == 0 )
+			return;
 
-	/* Set input region. This is necessary to prevent the unused parts of
-	 * the surface to catch pointer and touch events.
-	 */
-	wl_surface_set_input_region(instance->bar_surface, region);
-
-	wl_region_destroy(region);
+		struct wl_region *region = wl_compositor_create_region(context.compositor);
+		wl_region_add(region, (int32_t)bar_dim->x, (int32_t)bar_dim->y,
+				(int32_t)bar_dim->w, (int32_t)bar_dim->h);
+		wl_surface_set_input_region(instance->wl_surface, region);
+		wl_region_destroy(region);
+	}
 }
-
 
 static void layer_surface_handle_configure (void *data,
 		struct zwlr_layer_surface_v1 *surface, uint32_t serial,
@@ -1106,9 +899,11 @@ static void layer_surface_handle_configure (void *data,
 static void layer_surface_handle_closed (void *data, struct zwlr_layer_surface_v1 *surface)
 {
 	struct Lava_bar_instance *instance = (struct Lava_bar_instance *)data;
+	struct Lava_output       *output   = instance->output;
 	log_message(1, "[bar] Layer surface has been closed: global_name=%d\n",
 				instance->output->global_name);
 	destroy_bar_instance(instance);
+	output->bar_instance = NULL;
 }
 
 static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
@@ -1116,246 +911,168 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 	.closed    = layer_surface_handle_closed
 };
 
-static void bar_instance_configure_subsurface (struct Lava_bar_instance *instance)
-{
-	log_message(1, "[bar] Configuring icons: global_name=%d\n", instance->output->global_name);
-
-	wl_subsurface_set_position(instance->subsurface,
-			(int32_t)instance->item_area_dim.x, (int32_t)instance->item_area_dim.y);
-
-	/* We do not want to receive any input events from the subsurface.
-	 * Almot everything in LavaLauncher uses the coords of the parent surface.
-	 */
-	struct wl_region *region = wl_compositor_create_region(context.compositor);
-	wl_surface_set_input_region(instance->icon_surface, region);
-	wl_region_destroy(region);
-}
-
-/* Positions and dimensions for MODE_AGGRESSIVE. */
-static void bar_instance_mode_aggressive_dimensions (struct Lava_bar_instance *instance)
-{
-	struct Lava_bar_configuration *config = instance->config;
-	struct Lava_output           *output  = instance->output;
-
-	/* Position of item area. */
-	if ( config->orientation == ORIENTATION_HORIZONTAL ) switch (config->alignment)
-	{
-		case ALIGNMENT_START:
-			instance->item_area_dim.x = config->border.left + (uint32_t)config->margin.left;
-			instance->item_area_dim.y = config->border.top;
-			break;
-
-		case ALIGNMENT_CENTER:
-			instance->item_area_dim.x = (output->w / 2) - (instance->item_area_dim.w / 2)
-				+ (uint32_t)(config->margin.left - config->margin.right);
-			instance->item_area_dim.y = config->border.top;
-			break;
-
-		case ALIGNMENT_END:
-			instance->item_area_dim.x = output->w - instance->item_area_dim.w
-				- config->border.right - (uint32_t)config->margin.right;
-			instance->item_area_dim.y = config->border.top;
-			break;
-	}
-	else switch (config->alignment)
-	{
-		case ALIGNMENT_START:
-			instance->item_area_dim.x = config->border.left;
-			instance->item_area_dim.y = config->border.top + (uint32_t)config->margin.top;
-			break;
-
-		case ALIGNMENT_CENTER:
-			instance->item_area_dim.x = config->border.left;
-			instance->item_area_dim.y = (output->h / 2) - (instance->item_area_dim.h / 2)
-				+ (uint32_t)(config->margin.top - config->margin.bottom);
-			break;
-
-		case ALIGNMENT_END:
-			instance->item_area_dim.x = config->border.left;
-			instance->item_area_dim.y = output->h - instance->item_area_dim.h
-				- config->border.bottom - (uint32_t)config->margin.bottom;
-			break;
-	}
-
-	/* Position of bar. */
-	instance->bar_dim.x = instance->item_area_dim.x - config->border.left;
-	instance->bar_dim.y = instance->item_area_dim.y - config->border.top;
-
-	/* Size of bar. */
-	instance->bar_dim.w = instance->item_area_dim.w + config->border.left + config->border.right;
-	instance->bar_dim.h = instance->item_area_dim.h + config->border.top  + config->border.bottom;
-
-	/* Size of buffer / surface and hidden dimensions. */
-	if ( config->orientation == ORIENTATION_HORIZONTAL )
-	{
-		instance->surface_dim.w = instance->output->w;
-		instance->surface_dim.h = config->size + config->border.top + config->border.bottom;
-
-		instance->surface_hidden_dim.w = instance->surface_dim.w;
-		instance->surface_hidden_dim.h = config->hidden_size;
-
-		instance->bar_hidden_dim.w = instance->bar_dim.w;
-		instance->bar_hidden_dim.h = config->hidden_size;
-	}
-	else
-	{
-		instance->surface_dim.w = config->size + config->border.left + config->border.right;
-		instance->surface_dim.h = instance->output->h;
-
-		instance->surface_hidden_dim.w = config->hidden_size;
-		instance->surface_hidden_dim.h = instance->surface_dim.h;
-
-		instance->bar_hidden_dim.w = config->hidden_size;
-		instance->bar_hidden_dim.h = instance->bar_dim.h;
-	}
-	instance->bar_hidden_dim.x = instance->bar_dim.x;
-	instance->bar_hidden_dim.y = instance->bar_dim.y;
-}
-
-/* Positions and dimensions for MODE_FULL. */
-static void bar_instance_mode_full_dimensions (struct Lava_bar_instance *instance)
-{
-	struct Lava_bar_configuration *config = instance->config;
-	struct Lava_output           *output  = instance->output;
-
-	/* Position of item area. */
-	if ( config->orientation == ORIENTATION_HORIZONTAL ) switch (config->alignment)
-	{
-		case ALIGNMENT_START:
-			instance->item_area_dim.x = config->border.left + (uint32_t)config->margin.left;
-			instance->item_area_dim.y = config->border.top;
-			break;
-
-		case ALIGNMENT_CENTER:
-			instance->item_area_dim.x = (output->w / 2) - (instance->item_area_dim.w / 2)
-				+ (uint32_t)(config->margin.left - config->margin.right);
-			instance->item_area_dim.y = config->border.top;
-			break;
-
-		case ALIGNMENT_END:
-			instance->item_area_dim.x = output->w - instance->item_area_dim.w
-				- config->border.right - (uint32_t)config->margin.right;
-			instance->item_area_dim.y = config->border.top;
-			break;
-	}
-	else switch (config->alignment)
-	{
-		case ALIGNMENT_START:
-			instance->item_area_dim.x = config->border.left;
-			instance->item_area_dim.y = config->border.top + (uint32_t)config->margin.top;
-			break;
-
-		case ALIGNMENT_CENTER:
-			instance->item_area_dim.x = config->border.left;
-			instance->item_area_dim.y = (output->h / 2) - (instance->item_area_dim.h / 2)
-				+ (uint32_t)(config->margin.top - config->margin.bottom);
-			break;
-
-		case ALIGNMENT_END:
-			instance->item_area_dim.x = config->border.left;
-			instance->item_area_dim.y = output->h - instance->item_area_dim.h
-				- config->border.bottom - (uint32_t)config->margin.bottom;
-			break;
-	}
-
-	/* Position and size of bar and size of buffer / surface and hidden dimensions. */
-	if ( config->orientation == ORIENTATION_HORIZONTAL )
-	{
-		instance->bar_dim.x = (uint32_t)config->margin.left;
-		instance->bar_dim.y = 0;
-
-		instance->bar_dim.w = output->w - (uint32_t)(config->margin.left + config->margin.right);
-		instance->bar_dim.h = instance->item_area_dim.h + config->border.top + config->border.bottom;
-
-		instance->surface_dim.w = instance->output->w;
-		instance->surface_dim.h = config->size + config->border.top + config->border.bottom;
-
-		instance->surface_hidden_dim.w = instance->surface_dim.w;
-		instance->surface_hidden_dim.h = config->hidden_size;
-
-		instance->bar_hidden_dim.w = instance->bar_dim.w;
-		instance->bar_hidden_dim.h = config->hidden_size;
-	}
-	else
-	{
-		instance->bar_dim.x = 0;
-		instance->bar_dim.y = (uint32_t)config->margin.top;
-
-		instance->bar_dim.w = instance->item_area_dim.w + config->border.left + config->border.right;
-		instance->bar_dim.h = output->h - (uint32_t)(config->margin.top + config->margin.bottom);
-
-		instance->surface_dim.w = config->size + config->border.left + config->border.right;
-		instance->surface_dim.h = instance->output->h;
-
-		instance->surface_hidden_dim.w = config->hidden_size;
-		instance->surface_hidden_dim.h = instance->surface_dim.h;
-
-		instance->bar_hidden_dim.w = config->hidden_size;
-		instance->bar_hidden_dim.h = instance->bar_dim.h;
-	}
-}
-
-/* Position and size for MODE_DEFAULT. */
-static void bar_instance_mode_default_dimensions (struct Lava_bar_instance *instance)
-{
-	struct Lava_bar_configuration *config = instance->config;
-
-	/* Position of item area. */
-	instance->item_area_dim.x = config->border.left;
-	instance->item_area_dim.y = config->border.top;
-
-	/* Position of bar. */
-	instance->bar_dim.x = 0;
-	instance->bar_dim.y = 0;
-
-	/* Size of bar. */
-	instance->bar_dim.w = instance->item_area_dim.w + config->border.left + config->border.right;
-	instance->bar_dim.h = instance->item_area_dim.h + config->border.top  + config->border.bottom;
-
-	/* Size of hidden bar. */
-	if ( config->orientation == ORIENTATION_HORIZONTAL )
-	{
-		instance->bar_hidden_dim.w = instance->bar_dim.w;
-		instance->bar_hidden_dim.h = config->hidden_size;
-	}
-	else
-	{
-		instance->bar_hidden_dim.w = config->hidden_size;
-		instance->bar_hidden_dim.h = instance->bar_dim.h;
-	}
-
-	/* Size of buffer / surface. */
-	instance->surface_dim        = instance->bar_dim;
-	instance->surface_hidden_dim = instance->bar_hidden_dim;
-}
-
+// TODO XXX [item-rework] does the scaling work correctly?
 static void bar_instance_update_dimensions (struct Lava_bar_instance *instance)
 {
 	struct Lava_bar_configuration *config  = instance->config;
-	struct Lava_bar               *bar     = instance->bar;
 	struct Lava_output            *output  = instance->output;
 
 	if ( output->w == 0 || output->h == 0 )
 		return;
 
+	/* Position of the item area */
+	if ( instance->config->mode == MODE_DEFAULT )
+	{
+		instance->item_area_dim.x = config->border.left;
+		instance->item_area_dim.y = config->border.top;
+	}
+	else /* MODE_FULL */
+	{
+		if ( config->orientation == ORIENTATION_HORIZONTAL )
+		{
+			instance->item_area_dim.x = (output->w / 2) - (instance->item_area_dim.w / 2)
+				+ (uint32_t)(config->margin.left - config->margin.right);
+			instance->item_area_dim.y = config->border.top;
+		}
+		else
+		{
+			instance->item_area_dim.x = config->border.left;
+			instance->item_area_dim.y = (output->h / 2) - (instance->item_area_dim.h / 2)
+				+ (uint32_t)(config->margin.top - config->margin.bottom);
+		}
+	}
+
+	/* Dimensions of the individual item instances. */
+	uint32_t item_area_length = 0;
+	{
+		uint32_t x = instance->item_area_dim.x;
+		uint32_t y = instance->item_area_dim.y;
+
+		instance->active_items = context.item_amount;
+
+		for (int i = 0; i < context.item_amount; i++)
+		{
+			const uint32_t item_x = x;
+			const uint32_t item_y = y;
+			uint32_t item_w = 0, item_h = 0; /* Set to 0 to silence compiler warnings on some systems. */
+
+			switch (instance->item_instances[i].item->type)
+			{
+				case TYPE_BUTTON:
+					item_w = config->size;
+					item_h = config->size;
+					if ( config->orientation == ORIENTATION_HORIZONTAL )
+					{
+						x += item_w;
+						item_area_length += item_w;
+					}
+					else
+					{
+						y += item_h;
+						item_area_length += item_h;
+					}
+					break;
+
+				case TYPE_SPACER:
+					if ( config->orientation == ORIENTATION_HORIZONTAL )
+					{
+						item_w = instance->item_instances[i].item->spacer_length;
+						item_h = config->size;
+						x += item_w;
+						item_area_length += item_w;
+					}
+					else
+					{
+						item_w = config->size;
+						item_h = instance->item_instances[i].item->spacer_length;
+						y += item_h;
+						item_area_length += item_h;
+					}
+					break;
+			}
+
+			// TODO do we need to commit the parent surface?
+			configure_item_instance(&(instance->item_instances[i]),
+					item_x, item_y, item_w, item_h);
+		}
+	}
+
 	/* Size of item area. */
+	// TODO [item-rework] if bar gets too large, try de-activating a few items until it fits again
 	if ( config->orientation == ORIENTATION_HORIZONTAL )
 	{
-		instance->item_area_dim.w = get_item_length_sum(bar);
+		instance->item_area_dim.w = item_area_length;
 		instance->item_area_dim.h = config->size;
 	}
 	else
 	{
 		instance->item_area_dim.w = config->size;
-		instance->item_area_dim.h = get_item_length_sum(bar);
+		instance->item_area_dim.h = item_area_length;
 	}
 
 	/* Other dimensions. */
-	switch (instance->config->mode)
+	if ( instance->config->mode == MODE_DEFAULT )
 	{
-		case MODE_DEFAULT:    bar_instance_mode_default_dimensions(instance);    break;
-		case MODE_FULL:       bar_instance_mode_full_dimensions(instance);       break;
-		case MODE_AGGRESSIVE: bar_instance_mode_aggressive_dimensions(instance); break;
+		/* Position of bar (on surface). */
+		instance->bar_dim.x = 0;
+		instance->bar_dim.y = 0;
+
+		/* Size of bar. */
+		instance->bar_dim.w = instance->item_area_dim.w + config->border.left + config->border.right;
+		instance->bar_dim.h = instance->item_area_dim.h + config->border.top  + config->border.bottom;
+
+		/* Size of hidden bar. */
+		if ( config->orientation == ORIENTATION_HORIZONTAL )
+		{
+			instance->bar_hidden_dim.w = instance->bar_dim.w;
+			instance->bar_hidden_dim.h = config->hidden_size;
+		}
+		else
+		{
+			instance->bar_hidden_dim.w = config->hidden_size;
+			instance->bar_hidden_dim.h = instance->bar_dim.h;
+		}
+
+		/* Size of buffer / surface. */
+		instance->surface_dim        = instance->bar_dim;
+		instance->surface_hidden_dim = instance->bar_hidden_dim;
+	}
+	else if ( instance->config->mode == MODE_FULL )
+	{
+		if ( config->orientation == ORIENTATION_HORIZONTAL )
+		{
+			instance->bar_dim.x = (uint32_t)config->margin.left;
+			instance->bar_dim.y = 0;
+
+			instance->bar_dim.w = output->w - (uint32_t)(config->margin.left + config->margin.right);
+			instance->bar_dim.h = instance->item_area_dim.h + config->border.top + config->border.bottom;
+
+			instance->surface_dim.w = instance->output->w;
+			instance->surface_dim.h = instance->bar_dim.h;
+
+			instance->surface_hidden_dim.w = instance->surface_dim.w;
+			instance->surface_hidden_dim.h = config->hidden_size;
+
+			instance->bar_hidden_dim.w = instance->bar_dim.w;
+			instance->bar_hidden_dim.h = config->hidden_size;
+		}
+		else
+		{
+			instance->bar_dim.x = 0;
+			instance->bar_dim.y = (uint32_t)config->margin.top;
+
+			instance->bar_dim.w = instance->item_area_dim.w + config->border.left + config->border.right;
+			instance->bar_dim.h = output->h - (uint32_t)(config->margin.top + config->margin.bottom);
+
+			instance->surface_dim.w = instance->bar_dim.w;
+			instance->surface_dim.h = instance->output->h;
+
+			instance->surface_hidden_dim.w = config->hidden_size;
+			instance->surface_hidden_dim.h = instance->surface_dim.h;
+
+			instance->bar_hidden_dim.w = config->hidden_size;
+			instance->bar_hidden_dim.h = instance->bar_dim.h;
+		}
 	}
 }
 
@@ -1376,65 +1093,74 @@ static bool bar_instance_should_hide (struct Lava_bar_instance *instance)
 	}
 }
 
-bool create_bar_instance (struct Lava_bar *bar, struct Lava_bar_configuration *config,
-		struct Lava_output *output)
+struct Lava_bar_instance *create_bar_instance (struct Lava_output *output,
+		struct Lava_bar_configuration *config)
 {
 	log_message(1, "[bar] Creating bar instance: global_name=%d\n", output->global_name);
 
-	TRY_NEW(struct Lava_bar_instance, instance, false);
+	TRY_NEW(struct Lava_bar_instance, instance, NULL);
 
-	wl_list_insert(&output->bar_instances, &instance->link);
-	instance->bar           = bar;
-	instance->config        = config;
-	instance->output        = output;
-	instance->bar_surface   = NULL;
-	instance->icon_surface  = NULL;
-	instance->layer_surface = NULL;
-	instance->subsurface    = NULL;
-	instance->configured    = false;
-	instance->hover         = false;
-	instance->hidden        = bar_instance_should_hide(instance);
+	instance->config           = config;
+	instance->output           = output;
+	instance->configured       = false;
+	instance->hover            = false;
+	instance->background_dirty = true;
+	instance->hidden           = bar_instance_should_hide(instance);
+	instance->frame_callback   = NULL;
 
-	wl_list_init(&instance->indicators);
+	instance->wl_surface = wl_compositor_create_surface(context.compositor);
+	instance->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+			context.layer_shell, instance->wl_surface,
+			output->wl_output, config->layer,
+			str_orelse(config->namespace, "lhp.LavaLauncher"));
 
-	/* Main surface for the bar. */
-	if ( NULL == (instance->bar_surface = wl_compositor_create_surface(context.compositor)) )
+	/* Set up item_instances. */
 	{
-		log_message(0, "ERROR: Compositor did not create wl_surface.\n");
-		return false;
-	}
-	if ( NULL == (instance->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-					context.layer_shell, instance->bar_surface,
-					output->wl_output, config->layer,
-					str_orelse(config->namespace, "lhp.LavaLauncher"))) )
-	{
-		log_message(0, "ERROR: Compositor did not create layer_surface.\n");
-		return false;
+		instance->active_items   = context.item_amount;
+		instance->item_instances = calloc((size_t)context.item_amount,
+				sizeof(struct Lava_item_instance));
+		if ( instance->item_instances == NULL )
+		{
+			log_message(0, "ERROR: Failed to allocate.\n");
+			return NULL;
+		}
+
+		/* Dimensions and active state get filled in when bar dimensions
+		 * are calculated. Here we just assign item instances to their items.
+		 */
+		int i = 0;
+		struct Lava_item *item;
+		wl_list_for_each_reverse(item, &context.items, link)
+		{
+			init_item_instance(&(instance->item_instances[i]), instance, item);
+
+			/* If a toplevel with a matching app_id exist, apply indicators. */
+			if ( item->associated_app_id != NULL )
+			{
+				struct Lava_toplevel *toplevel;
+				wl_list_for_each(toplevel, &context.toplevels, link)
+				{
+					if ( toplevel->current.app_id != NULL && strcmp(item->associated_app_id, toplevel->current.app_id) == 0 )
+					{
+						instance->item_instances[i].toplevel_exists_indicator++;
+						if (toplevel->current.activated) 
+							instance->item_instances[i].toplevel_activated_indicator++;
+					}
+				}
+			}
+
+			i++;
+		}
 	}
 
-	/* Subsurface for the icons. */
-	if ( NULL == (instance->icon_surface = wl_compositor_create_surface(context.compositor)) )
-	{
-		log_message(0, "ERROR: Compositor did not create wl_surface.\n");
-		return false;
-	}
-	if ( NULL == (instance->subsurface = wl_subcompositor_get_subsurface(
-					context.subcompositor, instance->icon_surface,
-					instance->bar_surface)) )
-	{
-		log_message(0, "ERROR: Compositor did not create wl_subsurface.\n");
-		return false;
-	}
-
+	/* We draw when this surface gets a configure event. */
 	bar_instance_update_dimensions(instance);
 	bar_instance_configure_layer_surface(instance);
-	bar_instance_configure_subsurface(instance);
 	zwlr_layer_surface_v1_add_listener(instance->layer_surface,
 			&layer_surface_listener, instance);
-	wl_surface_commit(instance->icon_surface);
-	wl_surface_commit(instance->bar_surface);
+	wl_surface_commit(instance->wl_surface);
 
-	return true;
+	return instance;
 }
 
 void destroy_bar_instance (struct Lava_bar_instance *instance)
@@ -1442,35 +1168,30 @@ void destroy_bar_instance (struct Lava_bar_instance *instance)
 	if ( instance == NULL )
 		return;
 
-	struct Lava_item_indicator *indicator, *temp;
-	wl_list_for_each_safe(indicator, temp, &instance->indicators, link)
-		destroy_indicator(indicator);
+	/* Destroy item instances. */
+	if ( instance->item_instances != NULL )
+	{
+		for (int i = 0; i < context.item_amount; i++)
+			finish_item_instance(&(instance->item_instances[i]));
+		free(instance->item_instances);
+	}
 
 	DESTROY(instance->layer_surface, zwlr_layer_surface_v1_destroy);
-	DESTROY(instance->subsurface, wl_subsurface_destroy);
-	DESTROY(instance->bar_surface, wl_surface_destroy);
-	DESTROY(instance->icon_surface, wl_surface_destroy);
+	DESTROY(instance->wl_surface, wl_surface_destroy);
+	DESTROY(instance->frame_callback, wl_callback_destroy);
 
-	finish_buffer(&instance->bar_buffers[0]);
-	finish_buffer(&instance->bar_buffers[1]);
-	finish_buffer(&instance->icon_buffers[0]);
-	finish_buffer(&instance->icon_buffers[1]);
+	finish_buffer(&instance->buffers[0]);
+	finish_buffer(&instance->buffers[1]);
 
-	wl_list_remove(&instance->link);
 	free(instance);
-}
-
-void destroy_all_bar_instances (struct Lava_output *output)
-{
-	log_message(1, "[bar] Destroying bar instances: global-name=%d\n", output->global_name);
-	struct Lava_bar_instance *instance, *temp;
-	wl_list_for_each_safe(instance, temp, &output->bar_instances, link)
-		destroy_bar_instance(instance);
 }
 
 void update_bar_instance (struct Lava_bar_instance *instance, bool need_new_dimensions,
 		bool only_update_on_hide_change)
 {
+	log_message(2, "[bar] Updating bar instance: global_name=%d\n",
+			instance->output->global_name);
+
 	/* It is possible that this function is called by output events before
 	 * the bar instance has been created. This function will return and
 	 * abort unless it is called either when a surface configure event has
@@ -1485,7 +1206,9 @@ void update_bar_instance (struct Lava_bar_instance *instance, bool need_new_dime
 	{
 		log_message(2, "[bar] No configuration set, destroying bar: global-name=%d\n",
 			instance->output->global_name);
+		struct Lava_output *output = instance->output;
 		destroy_bar_instance(instance);
+		output->bar_instance = NULL;
 		return;
 	}
 
@@ -1494,22 +1217,47 @@ void update_bar_instance (struct Lava_bar_instance *instance, bool need_new_dime
 
 	const bool currently_hidden = instance->hidden;
 	instance->hidden = bar_instance_should_hide(instance);
-	if ( only_update_on_hide_change && ( currently_hidden == instance->hidden ) )
+	if ( currently_hidden != instance->hidden )
+	{
+		instance->background_dirty = true;
+		for (int i = 0; i < context.item_amount; i++)
+			instance->item_instances[i].dirty = true;
+	}
+	else if (only_update_on_hide_change)
 		return;
 
-	bar_instance_configure_subsurface(instance);
+	// TODO We don't always need to do this.
 	bar_instance_configure_layer_surface(instance);
-
-	bar_instance_render_icon_frame(instance);
-	bar_instance_render_background_frame(instance);
-
-	wl_surface_commit(instance->icon_surface);
-	wl_surface_commit(instance->bar_surface);
+	bar_instance_draw(instance);
+	wl_surface_commit(instance->wl_surface);
 }
 
 /* Call this to handle all changes to a bar instance when it is entered by a pointer. */
 void bar_instance_pointer_enter (struct Lava_bar_instance *instance)
 {
+	/* If binds using the keyboard have been defined, request keyboard interactivity.
+         *
+	 * Yes this is a ugly hack, because layer shell keyboard interactivity is seriously
+	 * messed up. A bar on the top layer would /always/ have keyboard focus if we
+	 * do not dynamically request and un-request it. Utter pain and does not work
+	 * correctly with multiple seats, but its the only way to get this somewhat
+	 * working, at least when the layer is either top or overlay. For bottom or
+	 * background layer, keyboard focus requires an explicit focus, which for most
+	 * compositors means clicking on the bar, so forget about scroll binds with
+	 * modifiers on those layers. Basically forget about any sane keyboard interactivity.
+	 * I have the feeling this part of the layer shell has not been thought through
+	 * very thoroughly...
+	 *
+	 * Yes, I am annoyed. Because this sucks.
+	 *
+	 * Improvements or, better yet, a layer-shell replacement highly welcome.
+	 */
+	if (context.need_keyboard)
+	{
+		zwlr_layer_surface_v1_set_keyboard_interactivity(instance->layer_surface, true);
+		wl_surface_commit(instance->wl_surface);
+	}
+
 	instance->hover = true;
 	update_bar_instance(instance, false, true);
 }
@@ -1525,6 +1273,16 @@ void bar_instance_pointer_leave (struct Lava_bar_instance *instance)
 		if ( seat->pointer.instance == instance )
 			return;
 
+	/* If binds using the keyboard have been defined, unset keyboard interactivity.
+	 *
+	 * See comment in bar_instance_pointer_enter() to learn why this is a hack and
+	 * then weep in agony and dispair.
+	 */
+	if (context.need_keyboard)
+	{
+		zwlr_layer_surface_v1_set_keyboard_interactivity(instance->layer_surface, false);
+		wl_surface_commit(instance->wl_surface);
+	}
 
 	instance->hover = false;
 	update_bar_instance(instance, false, true);
@@ -1535,20 +1293,30 @@ struct Lava_bar_instance *bar_instance_from_surface (struct wl_surface *surface)
 	if ( surface == NULL )
 		return NULL;
 	struct Lava_output *output;
-	struct Lava_bar_instance *instance;
 	wl_list_for_each(output, &context.outputs, link)
-		wl_list_for_each(instance,  &output->bar_instances, link)
-			if ( instance->bar_surface == surface )
-				return instance;
+		if ( output->bar_instance != NULL && output->bar_instance->wl_surface == surface )
+			return output->bar_instance;
 	return NULL;
 }
 
-struct Lava_bar_instance *bar_instance_from_bar (struct Lava_bar *bar, struct Lava_output *output)
+struct Lava_item_instance *bar_instance_get_item_instance_from_coords (
+		struct Lava_bar_instance *instance, int32_t _x, int32_t _y)
 {
-	struct Lava_bar_instance *instance;
-	wl_list_for_each(instance, &output->bar_instances, link)
-		if ( instance->bar == bar )
-			return instance;
+	const uint32_t x = (uint32_t)_x;
+	const uint32_t y = (uint32_t)_y;
+	for (int i = 0; i < instance->active_items; i++)
+	{
+		if ( x < instance->item_instances[i].x )
+			continue;
+		if ( y < instance->item_instances[i].y )
+			continue;
+		if ( x >= instance->item_instances[i].x + instance->item_instances[i].w )
+			continue;
+		if ( y >= instance->item_instances[i].y + instance->item_instances[i].h )
+			continue;
+		return &((instance->item_instances)[i]);
+	}
+
 	return NULL;
 }
 

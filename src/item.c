@@ -32,10 +32,19 @@
 #include"lavalauncher.h"
 #include"item.h"
 #include"seat.h"
-#include"str.h"
+#include"util.h"
 #include"bar.h"
 #include"output.h"
+#include"foreign-toplevel-management.h"
 #include"types/image_t.h"
+
+/* Helper macro to reduce error handling boiler plate code. */
+#define TRY(A) \
+	{ \
+		if (A)\
+			return true; \
+		goto error; \
+	}
 
 /*******************
  *                 *
@@ -91,30 +100,13 @@ static void item_command_exec_first_fork (struct Lava_bar_instance *instance, co
 static void execute_item_command (struct Lava_item_command *cmd, struct Lava_bar_instance *instance)
 {
 	const char *command = cmd->command;
-
+	if ( command == NULL )
+		return;
 	log_message(1, "[item] Executing command: %s\n", command);
-
-	/* Developer options meant for testing. Intentionally not documented. */
-	if (! strcmp(command, "exit"))
-	{
-		log_message(1, "[item] Triggering exit. "
-			"This is a developer option not intended for actual usage.\n");
-		context.loop   = false;
-		context.reload = false;
-		return;
-	}
-	else if (! strcmp(command, "reload"))
-	{
-		log_message(1, "[item] Triggering reload. "
-			"This is a developer option not intended for actual usage.\n");
-		context.loop   = false;
-		context.reload = true;
-		return;
-	}
-
 	item_command_exec_first_fork(instance, command);
 }
 
+/** Tries to find a matching command and returns it, otherwise returns NULL. */
 static struct Lava_item_command *find_item_command (struct Lava_item *item,
 		enum Interaction_type type, uint32_t modifiers, uint32_t special,
 		bool allow_universal)
@@ -127,18 +119,72 @@ static struct Lava_item_command *find_item_command (struct Lava_item *item,
 	return NULL;
 }
 
+/** Tries to find a matching command and overwrite it, otherwise create a new one. */
 static bool item_add_command (struct Lava_item *item, const char *command,
 		enum Interaction_type type, uint32_t modifiers, uint32_t special)
 {
-	TRY_NEW(struct Lava_item_command, cmd, false);
+	struct Lava_item_command *cmd = find_item_command(item, type, modifiers,
+			special, false);
 
-	cmd->type      = type;
-	cmd->modifiers = modifiers;
-	cmd->special   = special;
+	if ( cmd == NULL )
+	{
+		cmd = calloc(1, sizeof(struct Lava_item_command));
+		if ( cmd == NULL )
+		{
+			log_message(0, "ERROR: Can not allocte.\n");
+			return false;
+		}
 
+		cmd->type      = type;
+		cmd->modifiers = modifiers;
+		cmd->special   = special;
+		cmd->command   = NULL;
+
+		wl_list_insert(&item->commands, &cmd->link);
+	}
+
+	/* Parse meta action, if any. */
+	if ( *command == '@' )
+	{
+		struct
+		{
+			const char *name;
+			enum Meta_action action;
+		} actions[] = {
+			// TODO: @maximize-toplevel @unmaximize-toplevel @toggle-maximize-toplevel,
+			//       -> same for fullscreen and minimize
+			//       @close-all try to close /all/ toplevels with matching app_id
+			{ .name = "@toplevel-activate", .action = META_ACTION_TOPLEVEL_ACTIVATE },
+			{ .name = "@toplevel-close",    .action = META_ACTION_TOPLEVEL_CLOSE    },
+			{ .name = "@reload",            .action = META_ACTION_RELOAD            },
+			{ .name = "@exit",              .action = META_ACTION_EXIT              },
+		};
+
+		FOR_ARRAY(actions, i) if (string_starts_with(command, actions[i].name))
+		{
+			cmd->action = actions[i].action;
+
+			/* Check if command only contains the meta action. */
+			if ( strlen(command) == strlen(actions[i].name) )
+			{
+				free_if_set(cmd->command);
+				cmd->command = NULL;
+			}
+			else
+				set_string(&cmd->command, (char *)command + strlen(actions[i].name));
+
+			return true;
+		}
+
+		/* If we could not match any meta action despite the command
+		 * string starting with @, it may be part of the command itself,
+		 * so just fall through here.
+		 */
+	}
+
+	cmd->action = META_ACTION_NONE;
 	set_string(&cmd->command, (char *)command);
 
-	wl_list_insert(&item->commands, &cmd->link);
 	return true;
 }
 
@@ -166,6 +212,16 @@ static bool button_set_image_path (struct Lava_item *button, const char *path)
 	DESTROY(button->img, image_t_destroy);
 	if ( NULL == (button->img = image_t_create_from_file(path)) )
 		return false;
+	return true;
+}
+
+static bool button_set_toplevel_app_id (struct Lava_item *button, const char *app_id)
+{
+	free_if_set(button->associated_app_id);
+	if ( strcmp(app_id, "none") == 0 )
+		return true;
+	button->associated_app_id = strdup(app_id);
+	context.need_foreign_toplevel = true;
 	return true;
 }
 
@@ -298,15 +354,8 @@ static bool button_item_command_from_string (struct Lava_item *button,
 				goto error;
 			}
 
-			/* Try to find a fitting command and overwrite it.
-			 * If none has been found, create a new one.
-			 */
-			struct Lava_item_command *cmd = find_item_command(button,
-					type, modifiers, special, false);
-			if ( cmd == NULL )
-				return item_add_command(button, command, type, modifiers, special);
-			set_string(&cmd->command, (char *)command);
-			return true;
+			return item_add_command(button, (char *)command, type,
+					modifiers, special);
 		}
 		else if ( *ch == '[' )
 		{
@@ -352,27 +401,17 @@ static bool button_item_universal_command (struct Lava_item *button, const char 
 	 */
 	context.need_pointer = true;
 	context.need_touch = true;
-
-	/* Try to find a universal command and overwrite it. If none has been
-	 * found, create a new one.
-	 */
-	struct Lava_item_command *cmd = find_item_command(button,
-			INTERACTION_UNIVERSAL, 0, 0, false);
-	if ( cmd != NULL )
-	{
-		set_string(&cmd->command, (char *)command);
-		return true;
-	}
-
 	return item_add_command(button, command, INTERACTION_UNIVERSAL, 0, 0);
 }
 
 static bool button_set_variable (struct Lava_item *button, const char *variable,
-		const char *value, int line)
+		const char *value, uint32_t line)
 {
-	if (! strcmp("image-path", variable))
+	if ( strcmp("image-path", variable) == 0 )
 		TRY(button_set_image_path(button, value))
-	else if (! strcmp("command", variable)) /* Generic/universal command */
+	else if ( strcmp("toplevel-app-id", variable) == 0 )
+		TRY(button_set_toplevel_app_id(button, value))
+	else if ( strcmp("command", variable) == 0 ) /* Generic/universal command */
 		TRY(button_item_universal_command(button, value))
 	else if (string_starts_with(variable, "command"))  /* Command with special bind */
 		TRY(button_item_command_from_string(button, variable, value))
@@ -397,12 +436,12 @@ static bool spacer_set_length (struct Lava_item *spacer, const char *length)
 		log_message(0, "ERROR: Spacer size must be greater than 0.\n");
 		return false;
 	}
-	spacer->length = (unsigned int)len;
+	spacer->spacer_length = (uint32_t)len;
 	return true;
 }
 
 static bool spacer_set_variable (struct Lava_item *spacer,
-		const char *variable, const char *value, int line)
+		const char *variable, const char *value, uint32_t line)
 {
 	if (! strcmp("length", variable))
 		TRY(spacer_set_length(spacer, value))
@@ -415,7 +454,7 @@ error:
 }
 
 bool item_set_variable (struct Lava_item *item, const char *variable,
-		const char *value, int line)
+		const char *value, uint32_t line)
 {
 	switch (item->type)
 	{
@@ -436,7 +475,8 @@ bool item_set_variable (struct Lava_item *item, const char *variable,
  *        *
  **********/
 void item_interaction (struct Lava_item *item, struct Lava_bar_instance *instance,
-		enum Interaction_type type, uint32_t modifiers, uint32_t special)
+		struct Lava_seat *seat, enum Interaction_type type,
+		uint32_t modifiers, uint32_t special)
 {
 	if ( item->type != TYPE_BUTTON )
 		return;
@@ -444,87 +484,69 @@ void item_interaction (struct Lava_item *item, struct Lava_bar_instance *instanc
 	log_message(1, "[item] Interaction: type=%d mod=%d spec=%d\n",
 			type, modifiers, special);
 
-	struct Lava_item_command *cmd;
-	if ( NULL != (cmd = find_item_command(item, type, modifiers, special, true)) )
-		execute_item_command(cmd, instance);
+	struct Lava_item_command *cmd = find_item_command(item, type, modifiers, special, true);
+	if ( cmd == NULL )
+		return;
+
+	struct Lava_toplevel *toplevel;
+	switch (cmd->action)
+	{
+		case META_ACTION_NONE:
+			execute_item_command(cmd, instance);
+			break;
+
+		case META_ACTION_TOPLEVEL_ACTIVATE:
+			toplevel = find_toplevel_with_app_id(item->associated_app_id);
+			if ( toplevel == NULL )
+				execute_item_command(cmd, instance);
+			else
+			{
+				log_message(2, "[item] Activating toplevel: app-id=%s\n", item->associated_app_id);
+				zwlr_foreign_toplevel_handle_v1_activate(toplevel->handle, seat->wl_seat);
+			}
+			break;
+
+		case META_ACTION_TOPLEVEL_CLOSE:
+			toplevel = find_toplevel_with_app_id(item->associated_app_id);
+			if ( toplevel == NULL )
+				execute_item_command(cmd, instance);
+			else
+			{
+				log_message(2, "[item] Closing toplevel: app-id=%s\n", item->associated_app_id);
+				zwlr_foreign_toplevel_handle_v1_close(toplevel->handle);
+			}
+			break;
+
+		case META_ACTION_RELOAD:
+			execute_item_command(cmd, instance);
+			log_message(2, "[item] Triggering reload.\n");
+			context.loop   = false;
+			context.reload = true;
+			break;
+
+		case META_ACTION_EXIT:
+			execute_item_command(cmd, instance);
+			log_message(2, "[item] Triggering exit.\n");
+			context.loop   = false;
+			context.reload = false;
+			break;
+	}
 }
 
-bool create_item (struct Lava_bar *bar, enum Item_type type)
+bool create_item (enum Item_type type)
 {
 	log_message(2, "[item] Creating item.\n");
 
 	TRY_NEW(struct Lava_item, item, false);
 
-	item->index    = 0;
-	item->ordinate = 0;
-	item->length   = 0;
-	item->img      = NULL;
-	item->type     = type;
-	bar->last_item = item;
+	context.last_item = item;
+
+	item->img               = NULL;
+	item->type              = type;
+	item->associated_app_id = NULL;
+
 	wl_list_init(&item->commands);
-	wl_list_insert(&bar->items, &item->link);
-	return true;
-}
-
-/* Return pointer to Lava_item struct from item list which includes the
- * given surface-local coordinates on the surface of the given output.
- */
-struct Lava_item *item_from_coords (struct Lava_bar_instance *instance, uint32_t x, uint32_t y)
-{
-	struct Lava_bar               *bar    = instance->bar;
-	struct Lava_bar_configuration *config = instance->config;
-	uint32_t ordinate;
-	if ( config->orientation == ORIENTATION_HORIZONTAL )
-		ordinate = x - instance->item_area_dim.x;
-	else
-		ordinate = y - instance->item_area_dim.y;
-
-	struct Lava_item *item, *temp;
-	wl_list_for_each_reverse_safe(item, temp, &bar->items, link)
-	{
-		if ( ordinate >= item->ordinate
-				&& ordinate < item->ordinate + item->length )
-			return item;
-	}
-	return NULL;
-}
-
-unsigned int get_item_length_sum (struct Lava_bar *bar)
-{
-	unsigned int sum = 0;
-	struct Lava_item *it1, *it2;
-	wl_list_for_each_reverse_safe (it1, it2, &bar->items, link)
-		sum += it1->length;
-	return sum;
-}
-
-/* When items are created when parsing the config file, the size is not yet
- * available, so items need to be finalized later.
- */
-bool finalize_items (struct Lava_bar *bar)
-{
-	bar->item_amount = wl_list_length(&bar->items);
-	if ( bar->item_amount == 0 )
-	{
-		log_message(0, "ERROR: Configuration defines a bar without items.\n");
-		return false;
-	}
-
-
-	unsigned int index = 0, ordinate = 0;
-	struct Lava_item *it1, *it2;
-	wl_list_for_each_reverse_safe(it1, it2, &bar->items, link)
-	{
-		// TODO XXX set size to -1, which should cause it to automatically be config->size
-		if ( it1->type == TYPE_BUTTON )
-			it1->length = bar->default_config->size;
-
-		it1->index    = index;
-		it1->ordinate = ordinate;
-
-		index++;
-		ordinate += it1->length;
-	}
+	wl_list_insert(&context.items, &item->link);
 
 	return true;
 }
@@ -534,14 +556,152 @@ static void destroy_item (struct Lava_item *item)
 	wl_list_remove(&item->link);
 	destroy_all_item_commands(item);
 	DESTROY(item->img, image_t_destroy);
+	free_if_set(item->associated_app_id);
 	free(item);
 }
 
-void destroy_all_items (struct Lava_bar *bar)
+void destroy_all_items (void)
 {
 	log_message(1, "[items] Destroying all items.\n");
 	struct Lava_item *item, *temp;
-	wl_list_for_each_safe(item, temp, &bar->items, link)
+	wl_list_for_each_safe(item, temp, &context.items, link)
 		destroy_item(item);
+}
+
+/*******************
+ *                 *
+ *  Item instance  *
+ *                 *
+ *******************/
+void item_instance_next_frame (struct Lava_item_instance *instance)
+{
+	if ( instance->item->type != TYPE_BUTTON )
+	{
+		instance->dirty = false;
+		return;
+	}
+
+	// TODO store previous buffer, so that items do not need to be re-rendered
+	//      when bar unhides.
+	if (instance->bar_instance->hidden)
+	{
+		wl_surface_attach(instance->wl_surface, NULL, 0, 0);
+		wl_surface_commit(instance->wl_surface);
+		return;
+	}
+
+	log_message(2, "[item] Render item frame: global_name=%d\n",
+			instance->bar_instance->output->global_name);
+
+	struct Lava_bar_configuration *config = instance->bar_instance->config;
+	const uint32_t scale = instance->bar_instance->output->scale;
+	const uint32_t icon_padding = config->icon_padding;
+	const uint32_t indicator_padding = config->indicator_padding;
+
+	if (! next_buffer(&instance->current_buffer, context.shm, instance->buffers,
+			instance->w * scale, instance->h * scale))
+		return;
+
+	cairo_t *cairo = instance->current_buffer->cairo;
+	clear_cairo_buffer(cairo);
+	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
+
+	/* Active indicator: Shown when mouse button is pressed down on button 
+	 * or button is touched.
+	 */
+	if ( instance->active_indicator > 0 )
+	{
+		rounded_rectangle(cairo, indicator_padding, indicator_padding,
+				instance->w - (2 * indicator_padding),
+				instance->h - (2 * indicator_padding),
+				&config->radii, scale);
+		colour_t_set_cairo_source(cairo, &config->indicator_active_colour);
+		cairo_fill(cairo);
+	}
+	/* Hover indicator: Shown when cursor hovers over button. */
+	else if ( instance->indicator > 0 )
+	{
+		rounded_rectangle(cairo, indicator_padding, indicator_padding,
+				instance->w - (2 * indicator_padding),
+				instance->h - (2 * indicator_padding),
+				&config->radii, scale);
+		colour_t_set_cairo_source(cairo, &config->indicator_hover_colour);
+		cairo_fill(cairo);
+	}
+
+	// TODO draw indicators for toplevel state
+	// if ( instance->item_instances[i].toplevel_activated_indicator > 0 )
+	// {
+	// 	// TODO
+	// }
+	// if ( instance->item_instances[i].toplevel_exists_indicator > 0 )
+	// {
+	// 	// TODO
+	// }
+
+	/* Draw the icon. */
+	if ( instance->item->img != NULL )
+		image_t_draw_to_cairo(cairo, instance->item->img,
+				icon_padding, icon_padding,
+				instance->w - (2 * icon_padding),
+				instance->h - (2 * icon_padding), scale);
+
+	instance->dirty = false;
+	wl_surface_damage_buffer(instance->wl_surface, 0, 0, INT32_MAX, INT32_MAX);
+	wl_surface_set_buffer_scale(instance->wl_surface, (int32_t)scale);
+	wl_surface_attach(instance->wl_surface, instance->current_buffer->buffer, 0, 0);
+
+	wl_surface_commit(instance->wl_surface);
+}
+
+void configure_item_instance (struct Lava_item_instance *instance,
+		uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+	instance->dirty = true;
+
+	instance->x = x;
+	instance->y = y;
+	instance->w = w;
+	instance->h = h;
+
+	wl_subsurface_set_position(instance->wl_subsurface, (int32_t)x, (int32_t)y);
+	wl_surface_commit(instance->wl_surface);
+}
+
+void init_item_instance (struct Lava_item_instance *instance,
+		struct Lava_bar_instance *bar_instance, struct Lava_item *item)
+{
+	// TODO surface listener to know when cursor enters it
+	// -> replaces cursor movement handling code!
+	instance->item = item;
+	instance->active = true;
+	instance->bar_instance = bar_instance;
+	instance->indicator = 0;
+	instance->active_indicator = 0;
+	instance->toplevel_exists_indicator = 0;
+	instance->toplevel_activated_indicator = 0;
+	instance->wl_surface = wl_compositor_create_surface(context.compositor);
+	instance->wl_subsurface = wl_subcompositor_get_subsurface(context.subcompositor,
+			instance->wl_surface, bar_instance->wl_surface);
+
+	/* We update and render subsurfaces synchronous to the parent surface.
+	 * Also see update_bar_instance() and create_bar_instance().
+	 */
+	wl_subsurface_set_sync(instance->wl_subsurface);
+
+	// TODO remove when using surface listeners
+	struct wl_region *region = wl_compositor_create_region(context.compositor);
+	wl_surface_set_input_region(instance->wl_surface, region);
+	wl_region_destroy(region);
+
+	wl_surface_commit(instance->wl_surface);
+}
+
+void finish_item_instance (struct Lava_item_instance *instance)
+{
+	DESTROY(instance->wl_subsurface, wl_subsurface_destroy);
+	DESTROY(instance->wl_surface, wl_surface_destroy);
+	finish_buffer(&instance->buffers[0]);
+	finish_buffer(&instance->buffers[1]);
 }
 
