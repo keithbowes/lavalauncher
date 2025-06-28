@@ -132,7 +132,7 @@ static void output_handle_done (void *data, struct wl_output *wl_output)
 static const struct wl_output_listener output_listener = {
 	.scale    = output_handle_scale,
 	.geometry = output_handle_geometry,
-	.mode     = noop,
+	.mode     = (void (*) (void*, struct wl_output*, unsigned int, int, int, int)) noop,
 	.done     = output_handle_done
 };
 
@@ -160,11 +160,8 @@ static void xdg_output_handle_logical_size (void *data, struct zxdg_output_v1 *x
 static const struct zxdg_output_v1_listener xdg_output_listener = {
 	.logical_size     = xdg_output_handle_logical_size,
 	.name             = xdg_output_handle_name,
-	.logical_position = noop,
-	.description      = noop,
-
-	/* Deprecated since version 3, xdg_output property changes now send wl_output.done */
-	.done             = noop
+	.logical_position = (void (*) (void *, struct zxdg_output_v1*, int, int)) noop,
+	.description      = (void (*) (void *, struct zxdg_output_v1 *, const char *)) noop,
 };
 
 static void update_river_output_occupied_state (struct Lava_output *output)

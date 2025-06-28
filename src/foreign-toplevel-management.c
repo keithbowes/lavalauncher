@@ -211,17 +211,17 @@ static void toplevel_handle_handle_closed (void *data, struct zwlr_foreign_tople
 	destroy_toplevel(toplevel);
 }
 
-static void noop () {}
+static void noop (void) {}
 
 static const struct zwlr_foreign_toplevel_handle_v1_listener toplevel_handle_listener = {
-	.title        = noop,
+	.title        = (void (*) (void *, struct zwlr_foreign_toplevel_handle_v1 *, const char *)) noop,
 	.app_id       = toplevel_handle_handle_app_id,
-	.output_enter = noop,
-	.output_leave = noop,
+	.output_enter = (void (*) (void *, struct zwlr_foreign_toplevel_handle_v1 *, struct wl_output *)) noop,
+	.output_leave = (void (*) (void *, struct zwlr_foreign_toplevel_handle_v1 *, struct wl_output *)) noop,
 	.state        = toplevel_handle_handle_state,
 	.done         = toplevel_handle_handle_done,
 	.closed       = toplevel_handle_handle_closed,
-	.parent       = noop
+	.parent       = (void (*)(void *, struct zwlr_foreign_toplevel_handle_v1 *, struct zwlr_foreign_toplevel_handle_v1 *)) noop
 };
 
 static void toplevel_manager_handle_toplevel (void *data, struct zwlr_foreign_toplevel_manager_v1 *manager,

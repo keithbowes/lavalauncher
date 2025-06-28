@@ -107,12 +107,12 @@ static void keyboard_handle_keymap (void *data, struct wl_keyboard *keyboard,
  * and ignore everything else.
  */
 static const struct wl_keyboard_listener keyboard_listener  = {
-	.enter       = noop,
+	.enter       = (void (*) (void *, struct wl_keyboard*, unsigned int, struct wl_surface*, struct wl_array*)) noop,
 	.keymap      = keyboard_handle_keymap,
-	.key         = noop,
-	.leave       = noop,
+	.key         = (void (*) (void *, struct wl_keyboard*, unsigned int, unsigned int, unsigned int, unsigned int)) noop,
+	.leave       = (void (*) (void *, struct wl_keyboard*, unsigned int, struct wl_surface*)) noop,
 	.modifiers   = keyboard_handle_modifiers,
-	.repeat_info = noop
+	.repeat_info = (void (*) (void *, struct wl_keyboard *, int, int)) noop
 };
 
 static void seat_release_keyboard (struct Lava_seat *seat)
@@ -303,10 +303,10 @@ static void touch_handle_cancel (void *raw, struct wl_touch *touch)
 static const struct wl_touch_listener touch_listener = {
 	.cancel      = touch_handle_cancel,
 	.down        = touch_handle_down,
-	.frame       = noop,
+	.frame       = (void (*) (void *, struct wl_touch*)) noop,
 	.motion      = touch_handle_motion,
-	.orientation = noop,
-	.shape       = noop,
+	.orientation = (void (*) (void*, struct wl_touch*, int, int)) noop,
+	.shape       = (void (*) (void *, struct wl_touch *, int, int, int)) noop,
 	.up          = touch_handle_up
 };
 
@@ -658,8 +658,8 @@ static void pointer_handle_frame (void *data, struct wl_pointer *wl_pointer)
 static const struct wl_pointer_listener pointer_listener = {
 	.axis_discrete = pointer_handle_axis_discrete,
 	.axis          = pointer_handle_axis,
-	.axis_source   = noop,
-	.axis_stop     = noop,
+	.axis_source   = (void (*) (void *, struct wl_pointer*, unsigned int)) noop,
+	.axis_stop     = (void (*) (void *, struct wl_pointer *, unsigned int, unsigned int)) noop,
 	.button        = pointer_handle_button,
 	.enter         = pointer_handle_enter,
 	.frame         = pointer_handle_frame,
@@ -738,7 +738,7 @@ static void seat_handle_capabilities (void *data, struct wl_seat *wl_seat,
 
 static const struct wl_seat_listener seat_listener = {
 	.capabilities = seat_handle_capabilities,
-	.name         = noop
+	.name         = (void (*) (void*, struct wl_seat*, const char*)) noop
 };
 
 bool create_seat (struct wl_registry *registry, uint32_t name,
