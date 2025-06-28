@@ -1,0 +1,20 @@
+name: build
+on: [push, pull_request]
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        container: alpine:edge
+        steps:
+            - name: packages
+              run: |
+                apk add clang gcc cairo-dev libxkbcommon-dev meson musl-dev scdoc wayland-dev wayland-protocols
+            # actions/checkout@v4 clones the repository
+            - uses: actions/checkout@v4
+            - name: build-gcc
+              run: |
+                CC=gcc meson setup build-gcc
+                ninja -C build-gcc
+            - name: build-clang
+              run: |
+                CC=clang meson setup build-clang
+                ninja -C build-clang
