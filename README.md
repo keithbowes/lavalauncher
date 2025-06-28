@@ -60,7 +60,7 @@ and `scdoc` to generate the manpage.
 
     git clone https://git.sr.ht/~leon_plickat/lavalauncher
     cd lavalauncher
-    meson build
+    meson setup build
     ninja -C build
     sudo ninja -C build install
 

@@ -16,7 +16,7 @@ sources:
 tasks:
   - setup: |
       cd lavalauncher
-      meson --buildtype=release build
+      meson setup --buildtype=release build
   - build: |
       cd lavalauncher
       ninja -C build
