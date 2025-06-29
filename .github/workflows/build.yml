@@ -10,6 +10,9 @@ jobs:
             container: alpine:edge
           - distro: Arch
             container: archlinux:base-devel
+          - distro: FreeBSD
+            env:
+              SHPIPE: 'ssh freebsd sh -xe'
     runs-on: ubuntu-latest
     container: ${{ matrix.container }}
     steps:
@@ -37,19 +40,14 @@ jobs:
           if: matrix.distro == 'Arch'
           run: |
             export CFLAGS='-O2 -g -pipe -Wall -Wextra -Wpedantic -Werror=format-security -Wp,-D_FORTIFY_SOURCE=2 -Wp,-D_GLIBCXX_ASSERTIONS -fexceptions -fstack-protector-strong -grecord-gcc-switches -m64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -Wno-unused-parameter -Wpointer-arith -Wformat-security -Wunreachable-code -Wformat'
-        - name: build-freebsd
-          if: matrix.distro == 'FreeBSD'
+        - name: build-cc
+          # No need to build with GCC on FreeBSD
           run: |
             echo '
-              meson setup build
-              ninja -C build
-            ' | ssh  freebsd /bin/sh -xe
-        - name: build-gcc
-          # No need to build with GCC on FreeBSD
-          if: matrix.distro != 'FreeBSD'
-          run: |
-            CC=gcc meson setup build-gcc
-            ninja -C build-gcc
+              cd "$GITHUB_WORKSPACE"
+              CC=cc meson setup build-cc
+              ninja -C build-cc
+            ' | ${SHPIPE:-bin -xe}
         - name: build-clang
           # FreeBSD's cc is already clang
           if: matrix.distro != 'FreeBSD'
