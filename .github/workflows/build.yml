@@ -50,7 +50,7 @@ jobs:
               cd "$GITHUB_WORKSPACE"
               CC=cc meson setup build-cc
               ninja -C build-cc
-            ' | $SHPIPE
+            ' | $SHPIPE | tee
         - name: build-clang
           # FreeBSD's cc is already clang
           if: matrix.distro != 'FreeBSD'
