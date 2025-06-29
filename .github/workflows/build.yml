@@ -1,20 +1,48 @@
 name: build
 on: [push, pull_request]
 jobs:
-    build:
-        runs-on: ubuntu-latest
-        container: alpine:edge
-        steps:
-            - name: packages
-              run: |
-                apk add clang gcc cairo-dev libxkbcommon-dev meson musl-dev scdoc wayland-dev wayland-protocols
-            # actions/checkout@v4 clones the repository
-            - uses: actions/checkout@v4
-            - name: build-gcc
-              run: |
-                CC=gcc meson setup build-gcc
-                ninja -C build-gcc
-            - name: build-clang
-              run: |
-                CC=clang meson setup build-clang
-                ninja -C build-clang
+  build_matrix:
+    strategy:
+      matrix:
+        distro: [Alpine, Arch, FreeBSD]
+        include:
+          - distro: Alpine
+            container: alpine:edge
+          - distro: Arch
+            container: archlinux:base-devel
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    steps:
+        # actions/checkout@v4 clones the repository
+        - uses: actions/checkout@v4
+        - name: packages-alpine
+          if: matrix.distro == 'Alpine'
+          run: |
+            apk add clang gcc cairo-dev librsvg-dev libxkbcommon-dev meson musl-dev scdoc wayland-dev wayland-protocols
+        - name: packages-arch
+          if: matrix.distro == 'Arch'
+          run: |
+            pacman-key --init
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm clang gcc meson cairo wayland wayland-protocols scdoc libxkbcommon
+        - name: build-freebsd
+          if: matrix.distro == 'FreeBSD'
+          uses: vmactions/freebsd-vm@v1
+          with:
+            run: |
+              sed -i '' 's/quarterly/latest/' /etc/pkg/FreeBSD.conf
+              pkg install -y cairo evdev-proto libepoll-shim libinotify librsvg2-rust meson pkgconf scdoc wayland wayland-protocols libxkbcommon
+              meson setup build
+              ninja -C build
+        - name: set-arch-cflags
+          if: matrix.distro == 'Arch'
+          run: |
+            export CFLAGS='-O2 -g -pipe -Wall -Wextra -Wpedantic -Werror=format-security -Wp,-D_FORTIFY_SOURCE=2 -Wp,-D_GLIBCXX_ASSERTIONS -fexceptions -fstack-protector-strong -grecord-gcc-switches -m64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -Wno-unused-parameter -Wpointer-arith -Wformat-security -Wunreachable-code -Wformat'
+        # FreeBSD is already build above
+        - name: build-linux
+          if: matrix.distro != 'FreeBSD'
+          run: |
+            CC=gcc meson setup build-gcc
+            ninja -C build-gcc
+            CC=clang meson setup build-clang
+            ninja -C build-clang
