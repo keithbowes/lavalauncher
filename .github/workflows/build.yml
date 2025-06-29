@@ -30,9 +30,10 @@ jobs:
           if: matrix.distro == 'FreeBSD'
           uses: vmactions/freebsd-vm@v1
           with:
-            run: |
+            prepare: |
               sed -i '' 's/quarterly/latest/' /etc/pkg/FreeBSD.conf
               pkg install -y cairo evdev-proto libepoll-shim libinotify librsvg2-rust meson pkgconf scdoc wayland wayland-protocols libxkbcommon
+            run: echo 'Packages installed'
         # actions/checkout@v4 clones the repository
         - uses: actions/checkout@v4
         - name: set-arch-cflags
