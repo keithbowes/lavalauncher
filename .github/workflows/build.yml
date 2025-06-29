@@ -8,14 +8,10 @@ jobs:
         include:
           - distro: Alpine
             container: alpine:edge
-            os: ubuntu-latest
           - distro: Arch
             container: archlinux:base-devel
-            os: ubuntu-latest
-          - distro: FreeBSD
-            os: ubuntu-latest
-        runs-on: ${{ matrix.os }}
-        container: ${{ matrix.container }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
     steps:
         - name: packages-alpine
           if: matrix.distro == 'Alpine'
