@@ -10,6 +10,9 @@ jobs:
             container: alpine:edge
           - distro: Arch
             container: archlinux:base-devel
+          - distro: FreeBSD
+            env:
+              TARGET: 'ssh freebsd /bin/sh -xe'
     runs-on: ubuntu-latest
     container: ${{ matrix.container }}
     steps:
@@ -38,8 +41,10 @@ jobs:
             export CFLAGS='-O2 -g -pipe -Wall -Wextra -Wpedantic -Werror=format-security -Wp,-D_FORTIFY_SOURCE=2 -Wp,-D_GLIBCXX_ASSERTIONS -fexceptions -fstack-protector-strong -grecord-gcc-switches -m64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -Wno-unused-parameter -Wpointer-arith -Wformat-security -Wunreachable-code -Wformat'
         - name: build-cc
           run: |
-            CC=cc meson setup build-cc
-            ninja -C build-cc
+            echo '
+              CC=cc meson setup build-cc
+              ninja -C build-cc
+            ' | ${TARGET:-sh -xe}
         - name: build-clang
           # FreeBSD's cc is already clang
           if: matrix.distro != 'FreeBSD'
