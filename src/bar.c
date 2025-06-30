@@ -378,7 +378,10 @@ BAR_CONFIG(bar_config_set_mode)
 	else if (! strcmp(arg, "full"))
 		config->mode = MODE_FULL;
 	else if (! strcmp(arg, "aggressive"))
+	{
 		config->mode = MODE_AGGRESSIVE;
+		log_message(0, "WARNING: Mode 'aggressive' is deprecated. Use 'default' or 'full' instead.\n");
+	}
 	else
 	{
 		log_message(0, "ERROR: Unrecognized mode \"%s\".\n"
@@ -1073,6 +1076,20 @@ static void bar_instance_update_dimensions (struct Lava_bar_instance *instance)
 			instance->bar_hidden_dim.w = config->hidden_size;
 			instance->bar_hidden_dim.h = instance->bar_dim.h;
 		}
+	}
+	else if ( instance->config->mode == MODE_AGGRESSIVE )
+	{
+		if ( config->orientation == ORIENTATION_HORIZONTAL )
+		{
+			instance->bar_dim.w = output->w - (uint32_t)(config->margin.left + config->margin.right);
+			instance->bar_dim.h = instance->item_area_dim.h + config->border.top + config->border.bottom;
+		}
+		else
+		{
+			instance->bar_dim.w = instance->item_area_dim.w + config->border.left + config->border.right;
+			instance->bar_dim.h = output->h - (uint32_t)(config->margin.top + config->margin.bottom);
+		}
+		instance->surface_dim = instance->bar_dim;
 	}
 }
 
