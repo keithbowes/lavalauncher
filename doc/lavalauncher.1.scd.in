@@ -40,7 +40,7 @@ to find a configuration file at the following paths, in descending priority.
 - ./lavalauncher.ini
 - $XDG_CONFIG_HOME/lavalauncher/lavalauncher.ini
 - $HOME/.config/lavalauncher/lavalauncher.ini
-- /usr/local/etc/lavalauncher/lavalauncher.ini
+- @SYSCONFDIR@/lavalauncher/lavalauncher.ini
 - /etc/lavalauncher/lavalauncher.ini
 
 The configuration syntax is similar to the common INI format, consisiting of

@@ -30,7 +30,8 @@ add_project_arguments(cc.get_supported_arguments([
 if get_option('watch-config').enabled()
   add_project_arguments(cc.get_supported_arguments([ '-DWATCH_CONFIG' ]), language: 'c')
 endif
-add_project_arguments(cc.get_supported_arguments([ '-DPREFIX="' + get_option('prefix') + '"' ]), language: 'c')
+sysconfdir = get_option('prefix') / get_option('sysconfdir')
+add_project_arguments('-DSYSCONFDIR="' + sysconfdir + '"', language: 'c')
 
 version = '"@0@"'.format(meson.project_version())
 git = find_program('git', native: true, required: false)

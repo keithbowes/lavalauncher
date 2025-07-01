@@ -87,11 +87,7 @@ static bool get_default_config_path (void)
 		{ .fmt = "./lavalauncher.ini",                           .env = NULL                      },
 		{ .fmt = "%s/lavalauncher/lavalauncher.ini",             .env = getenv("XDG_CONFIG_HOME") },
 		{ .fmt = "%s/.config/lavalauncher/lavalauncher.ini",     .env = getenv("HOME")            },
-#ifdef PREFIX
-		{ .fmt = "%s/etc/lavalauncher/lavalauncher.ini",         .env = PREFIX                    },
-#else
-		{ .fmt = "/usr/local/etc/lavalauncher/lavalauncher.ini", .env = NULL                      },
-#endif
+		{ .fmt = "%s/lavalauncher/lavalauncher.ini",             .env = SYSCONFDIR                },
 		{ .fmt = "/etc/lavalauncher/lavalauncher.ini",           .env = NULL                      }
 	};
 
