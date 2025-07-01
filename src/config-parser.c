@@ -84,22 +84,27 @@ static bool get_default_config_path (void)
 		const char *fmt;
 		const char *env;
 	} paths[] = {
-		{ .fmt = "./lavalauncher.conf",                           .env = NULL                      },
-		{ .fmt = "%s/lavalauncher/lavalauncher.conf",             .env = getenv("XDG_CONFIG_HOME") },
-		{ .fmt = "%s/.config/lavalauncher/lavalauncher.conf",     .env = getenv("HOME")            },
-		{ .fmt = "/usr/local/etc/lavalauncher/lavalauncher.conf", .env = NULL                      },
-		{ .fmt = "/etc/lavalauncher/lavalauncher.conf",           .env = NULL                      }
+		{ .fmt = "./lavalauncher.ini",                           .env = NULL                      },
+		{ .fmt = "%s/lavalauncher/lavalauncher.ini",             .env = getenv("XDG_CONFIG_HOME") },
+		{ .fmt = "%s/.config/lavalauncher/lavalauncher.ini",     .env = getenv("HOME")            },
+#ifdef PREFIX
+		{ .fmt = "%s/etc/lavalauncher/lavalauncher.ini",         .env = PREFIX                    },
+#else
+		{ .fmt = "/usr/local/etc/lavalauncher/lavalauncher.ini", .env = NULL                      },
+#endif
+		{ .fmt = "/etc/lavalauncher/lavalauncher.ini",           .env = NULL                      }
 	};
 
 	FOR_ARRAY(paths, i)
 	{
+		free_if_set(context.config_path);
 		context.config_path = get_formatted_buffer(paths[i].fmt, paths[i].env);
+		log_message(1, "[config] Searching for config file %s\n", context.config_path);
 		if (! access(context.config_path, F_OK | R_OK))
 		{
 			log_message(1, "[config] Using default configuration file path: %s\n", context.config_path);
 			return true;
 		}
-		free_if_set(context.config_path);
 	}
 
 	log_message(0, "ERROR: Can not find configuration file.\n"

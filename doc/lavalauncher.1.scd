@@ -37,11 +37,11 @@ LavaLauncher is configured with a configuration file.
 Unless the path to a configuration file has been specified, LavaLauncher tries
 to find a configuration file at the following paths, in descending priority.
 
-- ./lavalauncher.conf
-- $XDG_CONFIG_HOME/lavalauncher/lavalauncher.conf
-- $HOME/.config/lavalauncher/lavalauncher.conf
-- /usr/local/etc/lavalauncher/lavalauncher.conf
-- /etc/lavalauncher/lavalauncher.conf
+- ./lavalauncher.ini
+- $XDG_CONFIG_HOME/lavalauncher/lavalauncher.ini
+- $HOME/.config/lavalauncher/lavalauncher.ini
+- /usr/local/etc/lavalauncher/lavalauncher.ini
+- /etc/lavalauncher/lavalauncher.ini
 
 The configuration syntax is similar to the common INI format, consisiting of
 *sections* and *assignments*. Assignments are always inside sections and on a
