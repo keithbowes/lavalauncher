@@ -196,47 +196,38 @@ void image_t_draw_to_cairo (cairo_t *cairo, image_t *image,
 	else if ( image->rsvg_handle != NULL )
 	{
 		// TODO maybe set DPI?
-		gboolean has_width, has_height, has_viewbox;
+		gboolean has_viewbox;
 		RsvgLength rsvg_width, rsvg_height;
-		RsvgRectangle viewbox = {.x=0, .y=0, .width=48, .height=48};	/*sensible defaults incase viewbox is missing from file*/
+		RsvgRectangle viewbox = {.x=0, .y=0, .width=48, .height=48};	/* Sensible defaults in case viewBox is missing from file. */
 
 		rsvg_handle_get_intrinsic_dimensions(image->rsvg_handle,
-				&has_width, &rsvg_width, &has_height, &rsvg_height,
+				NULL, &rsvg_width, NULL, &rsvg_height,
 				&has_viewbox, &viewbox);
 		const char *filename = g_filename_from_uri(rsvg_handle_get_base_uri(image->rsvg_handle), NULL, NULL);
 		if ( ! has_viewbox )
 		{
-			log_message(1, "[bar] Constructing viewbox for SVG image %s.\n", filename);
-			/* librsvg2 2.54.0+ always sets has_width and has_height to TRUE, with the
-			 * default height and width set to 100% (that is, .length is set to 1 and
-			 * .unit is set to RSVG_UNIT_PERCENT).
-			 * Therefore, it is unlikely that this message will ever be displayed. */
-			if ( ! has_width || ! has_height )
-				log_message(0, "INFO: SVG image %s is missing width/height, using default.\n", filename);
-			else if ( rsvg_width.length == 0 || rsvg_height.length == 0 )
-				log_message(0, "INFO: SVG image %s has a width/height of zero, using default.\n", filename);
+			log_message(1, "[bar] Constructing viewBox for SVG image %s.\n", filename);
+			if ( rsvg_width.length == 0 )
+				log_message(0, "INFO: SVG image %s has a width of zero, using default.\n", filename);
+			else if (rsvg_width.unit == RSVG_UNIT_PX)
+				viewbox.width = rsvg_width.length;
 			else
 			{
-				/* Try to convert non-pixel units to pixels */
-				if ( rsvg_width.unit != RSVG_UNIT_PX || rsvg_height.unit != RSVG_UNIT_PX )
-				{
-					gdouble rsvg_width_px, rsvg_height_px;
-					if (rsvg_handle_get_intrinsic_size_in_pixels(image->rsvg_handle, &rsvg_width_px, NULL))
-						viewbox.width = rsvg_width_px;
-					else if (rsvg_width.unit == RSVG_UNIT_PX)
-						viewbox.width = rsvg_width.length;
-					if (rsvg_handle_get_intrinsic_size_in_pixels(image->rsvg_handle, NULL, &rsvg_height_px))
-						viewbox.height = rsvg_height_px;
-					else if (rsvg_height.unit == RSVG_UNIT_PX)
-						viewbox.height = rsvg_height.length;
-				}
-				else
-				{
-					viewbox.width = rsvg_width.length;
-					viewbox.height = rsvg_height.length;
-				}
+				gdouble rsvg_width_px;
+				if (rsvg_handle_get_intrinsic_size_in_pixels(image->rsvg_handle, &rsvg_width_px, NULL))
+					viewbox.width = rsvg_width_px;
 			}
-			log_message(1, "[bar] Viewbox of SVG image %s constructed: width=%.0f height=%.0f.\n", filename, viewbox.width, viewbox.height);
+			if ( rsvg_height.length == 0 )
+				log_message(0, "INFO: SVG image %s has a height of zero, using default.\n", filename);
+			else if (rsvg_height.unit == RSVG_UNIT_PX)
+				viewbox.height = rsvg_height.length;
+			else
+			{
+				gdouble rsvg_height_px;
+				if (rsvg_handle_get_intrinsic_size_in_pixels(image->rsvg_handle, NULL, &rsvg_height_px))
+					viewbox.height = rsvg_height_px;
+			}
+			log_message(1, "[bar] Constructed viewBox of SVG image %s: width=%.0f height=%.0f.\n", filename, viewbox.width, viewbox.height);
 		}
 		if ( viewbox.width == 0 || viewbox.height == 0 )
 			log_message(0, "ERROR: Viewbox of SVG image %s has a width/height of zero.\n", filename);

@@ -52,7 +52,7 @@ wayland_client    = dependency('wayland-client', include_type: 'system')
 wayland_cursor    = dependency('wayland-cursor', include_type: 'system')
 cairo             = dependency('cairo')
 realtime          = cc.find_library('rt')
-librsvg           = dependency('librsvg-2.0', version: '>= 2.52', required: get_option('librsvg'))
+librsvg           = dependency('librsvg-2.0', version: '>= 2.54.0', required: get_option('librsvg'))
 xkbcommon         = dependency('xkbcommon')
 
 if ['dragonfly', 'freebsd', 'netbsd', 'openbsd'].contains(host_machine.system())
