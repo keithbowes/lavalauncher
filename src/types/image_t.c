@@ -31,6 +31,11 @@
 #if SVG_SUPPORT
 #include<librsvg-2.0/librsvg/rsvg.h>
 #endif
+#if HAS_LIBSFDO
+#include "bar.h"
+#include <sfdo-basedir.h>
+#include <sfdo-icon.h>
+#endif
 
 #include"util.h"
 #include"lavalauncher.h"
@@ -69,23 +74,102 @@ static int is_png_file (const char *path)
 	return 1;
 }
 
+#if HAS_LIBSFDO
+static struct sfdo_icon_file *get_icon_file(const char *image_name)
+{
+	const char *icon_theme_name = NULL;
+#if SVG_SUPPORT
+	/* Get the default icon theme from GLib if the schema is available.
+	 * It's not necessary but helps find generic icons.
+	 * Obviously this won't work when there's no SVG support, as librsvg is the only thing
+	 * providing access to GLib. */
+	GSettingsSchema *settings_schema = g_settings_schema_source_lookup(g_settings_schema_source_get_default(), "org.gnome.desktop.interface", FALSE);
+	if (settings_schema)
+	{
+		GSettings *gsettings = g_settings_new("org.gnome.desktop.interface");
+		icon_theme_name = (const char *) g_settings_get_string(gsettings, "icon-theme");
+	}
+	g_free(settings_schema);
+#endif
+	//
+	struct sfdo_basedir_ctx *basedir_context = sfdo_basedir_ctx_create();
+	struct sfdo_icon_ctx *icon_context = sfdo_icon_ctx_create(basedir_context);
+	struct sfdo_icon_theme *icon_theme = sfdo_icon_theme_load(icon_context, icon_theme_name, SFDO_ICON_THEME_LOAD_OPTION_RELAXED | SFDO_ICON_THEME_LOAD_OPTION_ALLOW_MISSING);
+	if (icon_theme != NULL)
+	{
+		/* sfdo_icon_theme_load sets errno to 2 for some reason. */
+		errno = 0;
+	}
+	const struct sfdo_string names[] = {
+		{ image_name, strlen(image_name) },
+		{ "application-x-executable", 24 },
+		{ "application-executable", 22 }, // Name in some older icon themes
+	};
+	size_t nnames = sizeof(names) / sizeof(const struct sfdo_string);
+	int lookup_options =
+#if SVG_SUPPORT
+		SFDO_ICON_THEME_LOOKUP_OPTIONS_DEFAULT;
+#else
+		SFDO_ICON_THEME_LOOKUP_OPTION_NO_SVG;
+#endif
+	/* Not using the simpler sfdo_icon_theme_lookup_best because it often returns the path for
+	 * application[-x]-executable even when the specified icon is available (seemingly by
+	 * design). */
+	struct sfdo_icon_file *icon_file;
+	for (size_t i = 0; i < nnames; i++)
+	{
+		icon_file = sfdo_icon_theme_lookup(icon_theme, names[i].data, names[i].len, (int) context.default_config->size, 1, lookup_options);
+		if (icon_file != NULL)
+			break;
+		sfdo_icon_file_destroy(icon_file);
+	}
+
+	sfdo_icon_theme_destroy(icon_theme);
+	sfdo_icon_ctx_destroy(icon_context);
+	sfdo_basedir_ctx_destroy(basedir_context);
+
+	return icon_file;
+}
+/* Create macros to avoid ifdef soup. */
+#define DECLARE_ICON_FILE struct sfdo_icon_file *icon_file = NULL;
+#define DESTROY_ICON_FILE sfdo_icon_file_destroy(icon_file);
+#else
+#define DECLARE_ICON_FILE
+#define DESTROY_ICON_FILE
+#endif
+
 static bool load_image (image_t *image, const char *path)
 {
+	DECLARE_ICON_FILE
 	if (access(path, F_OK))
 	{
+#if HAS_LIBSFDO
+		icon_file = get_icon_file(path);
+		if (icon_file != NULL)
+			path = sfdo_icon_file_get_path(icon_file, NULL);
+		else
+		{
+			log_message(0, "Failed to resolve path of icon %s\n", path);
+			DESTROY_ICON_FILE
+			return false;
+		}
+#else
 		log_message(0, "ERROR: File does not exist: %s\n", path);
 		return false;
+#endif
 	}
 	if (access(path, R_OK))
 	{
 		log_message(0, "ERROR: File can not be read: %s\n"
 				"INFO: Check the files permissions, owner and group.\n",
 				path);
+		DESTROY_ICON_FILE
 		return false;
 	}
 	if ( errno != 0 )
 	{
 		log_message(0, "ERROR: access: %s\n", strerror(errno));
+		DESTROY_ICON_FILE
 		return false;
 	}
 
@@ -99,19 +183,29 @@ static bool load_image (image_t *image, const char *path)
 			log_message(0, "ERROR: Failed loading image: %s\n"
 					"ERROR: cairo_image_surface_create_from_png: %s\n",
 					path, strerror(errno));
+			DESTROY_ICON_FILE
 			return false;
 		}
 		else
+		{
+			DESTROY_ICON_FILE
 			return true;
+		}
 	}
 	else if ( ret == -1 )
+	{
+		DESTROY_ICON_FILE
 		return false;
+	}
 
 #if SVG_SUPPORT
 	/* SVG */
 	GError *gerror = NULL;
 	if ( NULL != (image->rsvg_handle = rsvg_handle_new_from_file(path, &gerror)) )
+	{
+		DESTROY_ICON_FILE
 		return true;
+	}
 	else if ( gerror->domain != 123 )
 	{
 		/* The domain 123 is an XML parse error. Receiving it means that
@@ -121,6 +215,7 @@ static bool load_image (image_t *image, const char *path)
 		log_message(0, "ERROR: Failed to load image: %s\n"
 				"ERROR: rsvg_handle_new_from_file: %d: %s\n",
 				path, gerror->domain, gerror->message);
+		DESTROY_ICON_FILE
 		return false;
 	}
 #endif
@@ -134,6 +229,7 @@ static bool load_image (image_t *image, const char *path)
 #endif
 			path);
 
+	DESTROY_ICON_FILE
 	return false;
 }
 
