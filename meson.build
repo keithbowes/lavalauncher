@@ -52,6 +52,8 @@ wayland_cursor    = dependency('wayland-cursor', include_type: 'system')
 cairo             = dependency('cairo')
 realtime          = cc.find_library('rt')
 librsvg           = dependency('librsvg-2.0', version: '>= 2.54.0', required: get_option('librsvg'))
+libsfdo_base      = dependency('libsfdo-basedir', version: '>= 0.1.0', required: get_option('libsfdo'))
+libsfdo_icon      = dependency('libsfdo-icon', version: '>= 0.1.0', required: get_option('libsfdo'))
 xkbcommon         = dependency('xkbcommon')
 
 if ['dragonfly', 'freebsd', 'netbsd', 'openbsd'].contains(host_machine.system())
@@ -65,6 +67,9 @@ endif
 if librsvg.found()
   add_project_arguments(cc.get_supported_arguments([ '-DSVG_SUPPORT' ]), language: 'c')
 endif
+if libsfdo_base.found() and libsfdo_icon.found()
+  add_project_arguments(cc.get_supported_arguments([ '-DHAS_LIBSFDO' ]), language: 'c')
+endif
 
 subdir('protocol')
 subdir('doc')
@@ -74,6 +79,7 @@ summary({
   'handle-signals': get_option('handle-signals').enabled(),
   'man-pages': get_option('man-pages').enabled(),
   'librsvg': librsvg.found(),
+  'libsfdo': libsfdo_base.found() and libsfdo_icon.found(),
 }, bool_yn: true)
 
 executable(
@@ -99,6 +105,8 @@ executable(
     libepoll,
     libinotify,
     librsvg,
+    libsfdo_base,
+    libsfdo_icon,
     realtime,
     wayland_client,
     wayland_cursor,

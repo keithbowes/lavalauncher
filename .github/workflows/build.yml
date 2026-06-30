@@ -20,7 +20,7 @@ jobs:
         - name: packages-alpine
           if: matrix.distro == 'Alpine'
           run: |
-            apk add clang gcc cairo-dev librsvg-dev libxkbcommon-dev meson musl-dev scdoc wayland-dev wayland-protocols
+            apk add clang gcc cairo-dev librsvg-dev libsfdo-dev libxkbcommon-dev meson musl-dev scdoc wayland-dev wayland-protocols
         - name: packages-arch
           if: matrix.distro == 'Arch'
           run: |

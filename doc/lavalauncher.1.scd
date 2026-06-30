@@ -288,7 +288,8 @@ as follows.
 
 *image-path*
 	The path to an image file, which will be used as the icon of the
-	button.
+	button. It can be a simple icon name if support was enabled at
+	compile time.
 
 ## SPACER
 Every "spacer" context will add a spacer to a bar. As such, this context is a
@@ -325,7 +326,7 @@ Conditions are (re-)evaluated and bars created and destroyed and their active
 configuration set chosen accordingly whenever an outputs parameters are updated.
 
 ## IMAGES
-LavaLauncher support PNG images and, if enabled at compile time, SVG images. It
+LavaLauncher supports PNG images and, if enabled at compile time, SVG images. It
 is recommended to use square images.
 
 ## EXAMPLE CONFIGURATION
